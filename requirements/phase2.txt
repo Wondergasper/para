@@ -1,0 +1,14 @@
+# Phase 2: Polyhedral analysis + multi-candidate generation
+# Install with: pip install -r requirements/phase2.txt
+#
+# These are in addition to phase1.txt requirements.
+
+# Tree-sitter based Layer 1 analysis (more robust than pycparser)
+tree-sitter>=0.21.0
+tree-sitter-c>=0.21.0
+
+# ISL polyhedral analysis (optional — complex build on Windows)
+# Provides rigorous affine constraint solving instead of heuristic detection.
+# On Windows: may need manual build from https://repo.or.cz/w/isl.git
+# On Linux/macOS: pip install islpy
+# islpy>=2024.1

@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package apg;
+
+option go_package = "apg/internal/proto";
+
+message JobRequest {
+  string id = 1;
+  string source = 2;
+  string func_name = 3;
+  string model_version = 4;
+}
+
+message Attempt {
+  string candidate = 1;
+  double score = 2;
+  string gate = 3;
+  string error = 4;
+}
+
+message JobResponse {
+  string id = 1;
+  bool success = 2;
+  double score = 3;
+  string best_candidate = 4;
+  string annotated_ir_json = 5;
+  int32 rounds = 6;
+  string error = 7;
+  repeated Attempt attempts = 8;
+}

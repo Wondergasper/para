@@ -1,0 +1,23 @@
+# Phase 3: Formal verification bridge
+# No extra Python packages needed for Phase 3.
+# Phase 3 requires the following SYSTEM TOOLS:
+#
+# ── Gate 3b: CBMC Bounded Model Checker ───────────────────────────────────────
+#   Windows: https://github.com/diffblue/cbmc/releases
+#            Download cbmc-X.Y.Z-win64.msi and install
+#   Linux:   apt install cbmc
+#   macOS:   brew install cbmc
+#   Verify:  cbmc --version
+#
+# ── Gate 4: Lean 4 Formal Proof Assistant ────────────────────────────────────
+#   All platforms: curl https://elan.lean-lang.org/elan-init.sh -sSf | sh
+#   Verify:  lean --version
+#
+# ── ThreadSanitizer (Gate 3) ─────────────────────────────────────────────────
+#   Linux/macOS only (does not work on Windows):
+#   apt install clang  /  brew install llvm
+#
+# ── PostgreSQL (Phase 3+ proof corpus at scale) ───────────────────────────────
+#   Optional — local JSONL store is used by default.
+#   Docker: docker run -p 5432:5432 -e POSTGRES_PASSWORD=apg postgres:16
+#   Python driver: pip install psycopg2-binary

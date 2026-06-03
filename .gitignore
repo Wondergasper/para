@@ -1,0 +1,39 @@
+# IDEs, Editors, and OS files
+.vscode/
+.idea/
+.codex-run/
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# Go & C Compilations (Binaries and Objects)
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+orchestrator
+orchestrator_test
+apg
+.gocache/
+
+# Application Data & Databases
+data/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.log
