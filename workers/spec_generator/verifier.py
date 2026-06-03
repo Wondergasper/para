@@ -175,12 +175,11 @@ TSAN_HARNESS = textwrap.dedent("""
 {candidate_code}
 
 int main(void) {{
-    int N = 1024;
-    float *A = (float*)malloc(N * sizeof(float));
-    float *B = (float*)malloc(N * sizeof(float));
-    if (!A || !B) return 2;
-    for (int i = 0; i < N; i++) {{ A[i] = (float)i; B[i] = (float)(N - i); }}
-    free(A); free(B);
+    const int N = 1024;
+{allocations}
+{initializers}
+    {candidate_call}
+{frees}
     return 0;
 }}
 """)
@@ -409,6 +408,48 @@ def build_cbmc_harness(
 
 # ── Gate 1: Compile ────────────────────────────────────────────────────────────
 
+def build_tsan_harness(candidate_code: str, func_name: str) -> str:
+    candidate_name = f"apg_tsan_{func_name}"
+    parseable_code = "\n".join(
+        line for line in candidate_code.splitlines()
+        if not line.lstrip().startswith("#pragma")
+    )
+    params = parse_parameters(parseable_code, func_name)
+
+    allocations = []
+    initializers = []
+    frees = []
+    args = []
+
+    for p in params:
+        name = p["name"]
+        if p["is_ptr"]:
+            base_type = p["base_type"]
+            if base_type not in ("float", "double", "int"):
+                base_type = "float"
+            allocations.append(f"    {base_type} *{name} = ({base_type}*)malloc(N * sizeof({base_type}));")
+            allocations.append(f"    if (!{name}) return 2;")
+            if base_type == "int":
+                initializers.append(f"    for (int i = 0; i < N; i++) {name}[i] = i;")
+            else:
+                initializers.append(f"    for (int i = 0; i < N; i++) {name}[i] = ({base_type})i;")
+            frees.append(f"    free({name});")
+            args.append(name)
+        else:
+            if any(t in p["base_type"] for t in ("int", "size_t", "long", "short")) or name.upper() == "N":
+                args.append("N")
+            else:
+                args.append("2.5f")
+
+    return TSAN_HARNESS.format(
+        candidate_code=rename_c_function(candidate_code, func_name, candidate_name),
+        allocations="\n".join(allocations),
+        initializers="\n".join(initializers),
+        candidate_call=f"{candidate_name}({', '.join(args)});",
+        frees="\n".join(frees),
+    )
+
+
 def gate_compile(candidate_code: str, timeout: int = 30) -> tuple[bool, str]:
     """
     Gate 1: Attempt to compile the candidate with GCC + OpenMP.
@@ -530,7 +571,16 @@ def gate_race_freedom(candidate_code: str, timeout: int = 60) -> tuple[bool, str
     if not docker_ok and clang_path is None:
         return True, "TSAN gate skipped: clang not available"
 
-    harness = TSAN_HARNESS.format(candidate_code=candidate_code)
+    func_match = re.search(
+        r"\b[A-Za-z_][A-Za-z0-9_\s\*]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*\{",
+        candidate_code,
+    )
+    if not func_match:
+        return False, "TSAN harness error: could not find candidate function"
+    try:
+        harness = build_tsan_harness(candidate_code, func_match.group(1))
+    except ValueError as exc:
+        return False, f"TSAN harness error: {exc}"
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "tsan_test.c")
         with open(src_path, "w", encoding="utf-8") as f:

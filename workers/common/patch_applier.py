@@ -150,21 +150,17 @@ def apply_patch(source: str, patch_str: str) -> str:
 
 
 def _apply_fuzzy_patch(source: str, patch_lines: list[str]) -> str:
-    """Fuzzy line replacer when standard @@ hunk parsing fails."""
-    source_lines = source.splitlines()
-    for line in patch_lines:
-        if line.startswith("-"):
-            target = line[1:].strip()
-            # find and remove
-            for idx, sl in enumerate(source_lines):
-                if sl.strip() == target:
-                    source_lines.pop(idx)
-                    break
-        elif line.startswith("+"):
-            addition = line[1:].strip()
-            # add to the end of functions or heuristically
-            source_lines.append(addition)
-    return "\n".join(source_lines) + "\n"
+    """Reject unanchored patches instead of guessing where additions belong."""
+    diff_lines = [
+        line for line in patch_lines
+        if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+    ]
+    if diff_lines:
+        raise PatchError(
+            "Patch contains additions/removals but no @@ hunk headers; "
+            "refusing to apply unanchored changes."
+        )
+    raise PatchError("Patch does not contain any unified diff hunks.")
 
 
 if __name__ == "__main__":

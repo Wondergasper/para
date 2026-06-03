@@ -16,6 +16,8 @@ type NATSQueue struct {
 	js jetstream.JetStream
 }
 
+var APGStreamSubjects = []string{"apg.jobs.*", "apg.results"}
+
 func NewNATSQueue(url string) (*NATSQueue, error) {
 	nc, err := nats.Connect(url)
 	if err != nil {
@@ -31,7 +33,7 @@ func NewNATSQueue(url string) (*NATSQueue, error) {
 	ctx := context.Background()
 	_, err = js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:     "APG",
-		Subjects: []string{"apg.jobs.*", "apg.results"},
+		Subjects: APGStreamSubjects,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create stream: %w", err)

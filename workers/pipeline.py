@@ -253,19 +253,6 @@ def run(
         round_best_candidate = ""
         round_best_ver       = None
 
-        if cfg.skip_verification:
-            best_candidate = candidates[0] if candidates else ""
-            best_score = 0.0
-            maybe_record_proof(
-                cfg, source_code, best_candidate, annotated_ir, dep_graph,
-                func_name, "skipped", False, best_score, "verification skipped",
-            )
-            maybe_record_reward(
-                cfg, source_code, best_candidate, func_name,
-                "skipped", False, best_score,
-            )
-            break
-
         _log(f"  Verifying {len(candidates)} candidate(s) in parallel...", cfg.verbose, cfg.job_id)
 
         with ThreadPoolExecutor(max_workers=min(len(candidates), 8)) as executor:

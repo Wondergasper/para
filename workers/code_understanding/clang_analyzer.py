@@ -76,6 +76,7 @@ def _parse_clang_ast(ast_text: str, source_code: str) -> dict:
     loop structure, array accesses, and reduction patterns.
     """
     lines = ast_text.splitlines()
+    source_lines = source_code.splitlines()
     
     func_name = "func"
     func_params = []
@@ -92,9 +93,6 @@ def _parse_clang_ast(ast_text: str, source_code: str) -> dict:
     array_sub_re = re.compile(r"ArraySubscriptExpr")
     # Matches BinaryOperator or CompoundAssignOperator for += etc.
     op_re = re.compile(r"(?:BinaryOperator|CompoundAssignOperator)\s+0x[a-f0-9]+\s+<.*?>\s+'([^']+)'\s+lvalue\s+'([^']+)'")
-    
-    current_loop_depth = 0
-    loop_vars = []
     
     for idx, line in enumerate(lines):
         # Determine current AST node depth by counting leading indentation characters
@@ -117,14 +115,40 @@ def _parse_clang_ast(ast_text: str, source_code: str) -> dict:
                 
         # 3. Detect For loops
         elif "ForStmt" in line:
-            # Look ahead in subsequent lines for loop variables
-            # For simplicity, extract variable names heuristically from source_code
-            pass
+            line_match = re.search(r"<line:(\d+):\d+", line)
+            if line_match:
+                source_idx = int(line_match.group(1)) - 1
+                if 0 <= source_idx < len(source_lines):
+                    loop_line = source_lines[source_idx]
+                    loop_match = re.search(r"for\s*\(\s*(?:int\s+)?(\w+)\s*=", loop_line)
+                    if loop_match:
+                        for_loops.append({
+                            "var": loop_match.group(1),
+                            "source_line": source_idx + 1,
+                            "ast_line": idx + 1,
+                        })
+                        continue
+
+            # If the range does not include a usable source line, inspect the
+            # loop subtree for the initializer variable declared by Clang.
+            for child in lines[idx + 1: idx + 12]:
+                if "ForStmt" in child and child is not line:
+                    break
+                decl_match = re.search(r"VarDecl\s+0x[a-f0-9]+\s+<.*?>.*?\s+(\w+)\s+'", child)
+                if decl_match:
+                    for_loops.append({
+                        "var": decl_match.group(1),
+                        "source_line": None,
+                        "ast_line": idx + 1,
+                    })
+                    break
 
     # Extract loops and array accesses from source code as fallback / validation
     # to combine Clang's robust type resolution with syntax parsing
     # Parse loop bounds and accesses using regexes validated by the Clang types
-    loop_vars_found = re.findall(r"for\s*\(\s*(?:int\s+)?(\w+)\s*=", source_code)
+    loop_vars_found = [loop["var"] for loop in for_loops]
+    if not loop_vars_found:
+        loop_vars_found = re.findall(r"for\s*\(\s*(?:int\s+)?(\w+)\s*=", source_code)
     
     # Detect reduction variables (e.g. sum += ...)
     reduction_matches = re.findall(r"(\w+)\s*(?:\+=|-=|\*=)\s*", source_code)

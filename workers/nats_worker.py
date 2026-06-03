@@ -84,7 +84,7 @@ async def main():
     except Exception:
         log.warning("APG stream not found yet — creating it.")
         try:
-            await js.add_stream(name="APG", subjects=["apg.jobs", "apg.results"])
+            await js.add_stream(name="APG", subjects=["apg.jobs.*", "apg.results"])
         except Exception as e:
             log.error(f"Could not create APG stream: {e}")
 

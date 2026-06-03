@@ -17,7 +17,11 @@ Usage:
     print(result)
 """
 
+import logging
 import os
+import time
+
+log = logging.getLogger("apg.llm")
 
 
 # ── Provider configurations ────────────────────────────────────────────────────
@@ -82,6 +86,8 @@ def generate(
     model:    str   = None,
     temp:     float = 0.2,
     max_tokens: int = 2048,
+    max_retries: int = 2,
+    retry_backoff: float = 0.25,
 ) -> str:
     """
     Send a prompt to the LLM and return the response text.
@@ -108,20 +114,37 @@ def generate(
     if model is None:
         model = PROVIDERS[provider]["default_model"]
 
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system",  "content": system},
-                {"role": "user",    "content": prompt},
-            ],
-            temperature=temp,
-            max_tokens=max_tokens,
-        )
-        return response.choices[0].message.content
+    attempts = max(1, max_retries)
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system",  "content": system},
+                    {"role": "user",    "content": prompt},
+                ],
+                temperature=temp,
+                max_tokens=max_tokens,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            last_error = e
+            if attempt >= attempts:
+                break
+            sleep_for = retry_backoff * (2 ** (attempt - 1))
+            log.warning(
+                "LLM call failed [%s/%s] on attempt %d/%d; retrying in %.2fs: %s",
+                provider,
+                model,
+                attempt,
+                attempts,
+                sleep_for,
+                e,
+            )
+            time.sleep(sleep_for)
 
-    except Exception as e:
-        raise RuntimeError(f"LLM call failed [{provider}/{model}]: {e}") from e
+    raise RuntimeError(f"LLM call failed [{provider}/{model}]: {last_error}") from last_error
 
 
 def generate_batch(
@@ -159,8 +182,9 @@ def generate_batch(
         if len(choices) >= n:
             return choices
         remaining = n - len(choices)
-    except Exception:
+    except Exception as e:
         # Fallback to sequential generation with varying temperatures
+        log.warning("Batch generation failed, falling back to sequential generation: %s", e)
         choices = []
         remaining = n
 
@@ -171,7 +195,8 @@ def generate_batch(
             res = generate(prompt, system, provider, model, temp=new_temp, max_tokens=max_tokens)
             if res:
                 choices.append(res)
-        except Exception:
+        except Exception as e:
+            log.warning("Sequential fallback generation failed for candidate %d/%d: %s", i + 1, remaining, e)
             pass
 
     return choices

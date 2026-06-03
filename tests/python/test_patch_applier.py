@@ -38,3 +38,14 @@ def test_apply_patch_failure():
 """
     with pytest.raises(PatchError):
         apply_patch(src, patch)
+
+
+def test_fuzzy_patch_rejects_unanchored_additions():
+    src = "int main() {\n    return 0;\n}\n"
+    patch = """--- candidate
++++ fixed
++    printf("hello");
+"""
+
+    with pytest.raises(PatchError):
+        apply_patch(src, patch)

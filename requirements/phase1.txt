@@ -1,4 +1,4 @@
 openai>=1.30.0
 nats-py>=2.7.0
-pycparser>=2.21,<4
+pycparser>=2.21,<3
 protobuf>=4.25.0

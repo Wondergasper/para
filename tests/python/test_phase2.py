@@ -135,6 +135,64 @@ class Phase2CandidatePoolTests(unittest.TestCase):
             _, kwargs = mock_client.chat.completions.create.call_args
             self.assertEqual(kwargs["n"], 3)
 
+    def test_generate_batch_logs_batch_failure(self):
+        from unittest.mock import MagicMock, patch
+        from workers.common.llm_client import generate_batch
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "void fallback(void) {}"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        with patch("workers.common.llm_client.get_client") as mock_get_client:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.side_effect = [
+                RuntimeError("n unsupported"),
+                mock_response,
+            ]
+            mock_get_client.return_value = mock_client
+
+            with self.assertLogs("apg.llm", level="WARNING") as logs:
+                results = generate_batch(
+                    prompt="test",
+                    system="test",
+                    provider="ollama",
+                    n=1,
+                )
+
+            self.assertEqual(results, ["void fallback(void) {}"])
+            self.assertTrue(any("Batch generation failed" in msg for msg in logs.output))
+
+    def test_generate_retries_transient_failures(self):
+        from unittest.mock import MagicMock, patch
+        from workers.common.llm_client import generate
+
+        mock_choice = MagicMock()
+        mock_choice.message.content = "ok"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+
+        with patch("workers.common.llm_client.get_client") as mock_get_client, \
+             patch("workers.common.llm_client.time.sleep") as mock_sleep:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.side_effect = [
+                RuntimeError("temporary"),
+                mock_response,
+            ]
+            mock_get_client.return_value = mock_client
+
+            result = generate(
+                prompt="test",
+                system="test",
+                provider="ollama",
+                max_retries=2,
+                retry_backoff=0,
+            )
+
+            self.assertEqual(result, "ok")
+            self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+            mock_sleep.assert_called_once()
+
 
     def test_clang_analyzer_checks_availability(self):
         from workers.code_understanding.clang_analyzer import is_clang_available
