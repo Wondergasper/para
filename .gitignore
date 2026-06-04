@@ -37,3 +37,4 @@ data/
 *.db-shm
 *.db-wal
 *.log
+.ENV
