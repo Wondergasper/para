@@ -38,3 +38,6 @@ data/
 *.db-wal
 *.log
 .ENV
+.env
+.env.local
+.env.*.local
