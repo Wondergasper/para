@@ -40,5 +40,30 @@ class Phase3CBMCTests(unittest.TestCase):
         self.assertEqual(config.cbmc_path, "cbmc")
 
 
+    def test_cbmc_gate_success_and_failure(self):
+        import shutil
+        if not shutil.which("cbmc"):
+            self.skipTest("CBMC not available on this system")
+
+        reference = """void vector_scale(float* A, float s, int N) {
+    for (int i = 0; i < N; i++) A[i] *= s;
+}"""
+        # Correct candidate
+        correct_candidate = """void vector_scale(float* A, float s, int N) {
+    #pragma omp parallel for
+    for (int i = 0; i < N; i++) A[i] *= s;
+}"""
+        ok, out = gate_cbmc_model_check(correct_candidate, reference, "vector_scale", array_size=4)
+        self.assertTrue(ok, f"Expected correct candidate to pass, got output: {out}")
+
+        # Incorrect candidate (e.g. wrong scalar scaling)
+        incorrect_candidate = """void vector_scale(float* A, float s, int N) {
+    #pragma omp parallel for
+    for (int i = 0; i < N; i++) A[i] *= s + 1.0f;
+}"""
+        ok, out = gate_cbmc_model_check(incorrect_candidate, reference, "vector_scale", array_size=4)
+        self.assertFalse(ok, "Expected incorrect candidate to fail CBMC check")
+
+
 if __name__ == "__main__":
     unittest.main()

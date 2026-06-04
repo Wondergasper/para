@@ -55,6 +55,17 @@ class ProofCorpusStore:
         directory = os.path.dirname(self.path)
         if directory:
             os.makedirs(directory, exist_ok=True)
+        if os.path.exists(self.path):
+            with open(self.path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            data = json.loads(line)
+                            if data.get("source_code") == record.source_code and data.get("parallel_code") == record.parallel_code:
+                                return
+                        except json.JSONDecodeError:
+                            continue
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(record.to_json() + "\n")
 

@@ -944,7 +944,7 @@ function onProviderChange() {
   const provider = document.getElementById('cfgProvider').value;
   const modelInput = document.getElementById('cfgModel');
   if (provider === 'gemini') {
-    modelInput.placeholder = 'gemini-1.5-flash';
+    modelInput.placeholder = 'gemini-2.5-flash';
   } else if (provider === 'groq') {
     modelInput.placeholder = 'llama3-8b-8192';
   } else {
@@ -1166,23 +1166,48 @@ function renderDiff(original, parallel) {
 
   const oLines = original.split('\n');
   const pLines = parallel.split('\n');
+  
+  let oIdx = 0;
+  let pIdx = 0;
   let html = '';
+  let lineNum = 1;
 
-  // Simple line-by-line diff
-  const maxLines = Math.max(oLines.length, pLines.length);
-  let oIdx = 0, pIdx = 0;
-
-  // Use LCS-style: find lines that match and show +/-
-  const oSet = new Set(oLines.map((l,i) => l.trim()));
-  const pSet = new Set(pLines.map((l,i) => l.trim()));
-
-  pLines.forEach((line, i) => {
-    const trimmed = line.trim();
-    const isNew = !oLines.some(o => o.trim() === trimmed);
-    const cls = isNew ? 'add' : '';
-    const prefix = isNew ? '+' : ' ';
-    html += `<div class="diff-line ${cls}"><span class="ln">${i+1}</span><span class="dc">${prefix} ${escHtml(line)}</span></div>`;
-  });
+  while (oIdx < oLines.length || pIdx < pLines.length) {
+    if (oIdx < oLines.length && pIdx < pLines.length) {
+      if (oLines[oIdx].trim() === pLines[pIdx].trim()) {
+        // Line matches
+        html += `<div class="diff-line"><span class="ln">${lineNum++}</span><span class="dc">  ${escHtml(pLines[pIdx])}</span></div>`;
+        oIdx++;
+        pIdx++;
+      } else {
+        // Mismatch: check if it's an insertion
+        let foundMatch = false;
+        for (let k = pIdx; k < Math.min(pLines.length, pIdx + 5); k++) {
+          if (pLines[k].trim() === oLines[oIdx].trim()) {
+            foundMatch = true;
+            break;
+          }
+        }
+        if (foundMatch) {
+          // Lines in parallel were added
+          html += `<div class="diff-line add"><span class="ln">${lineNum++}</span><span class="dc">+ ${escHtml(pLines[pIdx])}</span></div>`;
+          pIdx++;
+        } else {
+          // Line in original was removed
+          html += `<div class="diff-line del"><span class="ln">-</span><span class="dc">- ${escHtml(oLines[oIdx])}</span></div>`;
+          oIdx++;
+        }
+      }
+    } else if (pIdx < pLines.length) {
+      // Remaining parallel lines are additions
+      html += `<div class="diff-line add"><span class="ln">${lineNum++}</span><span class="dc">+ ${escHtml(pLines[pIdx])}</span></div>`;
+      pIdx++;
+    } else if (oIdx < oLines.length) {
+      // Remaining original lines are deletions
+      html += `<div class="diff-line del"><span class="ln">-</span><span class="dc">- ${escHtml(oLines[oIdx])}</span></div>`;
+      oIdx++;
+    }
+  }
 
   wrap.innerHTML = html || '<div class="empty-state">Files are identical.</div>';
 }

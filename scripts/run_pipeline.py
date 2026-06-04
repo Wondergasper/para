@@ -43,6 +43,8 @@ def main() -> int:
     parser.add_argument("--enable-proof",   action="store_true")
     parser.add_argument("--proof-corpus",   default="data/proofs.jsonl")
     parser.add_argument("--reward-events",  default="data/rewards.jsonl")
+    parser.add_argument("--language",       default="c",
+                        choices=["c", "fortran", "python", "rust"])
     args = parser.parse_args()
 
     # ------------------------------------------------------------------
@@ -65,20 +67,52 @@ def main() -> int:
                               "error": "empty source code"}))
             return 1
 
+        # Fallback defaults from CLI arguments
+        provider = args.provider
+        model = args.model
+        max_candidates = args.max_candidates
+        max_rounds = args.max_rounds
+        use_local_classifier = False
+        target = "openmp"
+        language = args.language
+        enable_cbmc = args.enable_cbmc
+        cbmc_path = args.cbmc_path
+
+        # Check if model_version contains JSON configuration
+        try:
+            configs = json.loads(model_version)
+            if isinstance(configs, dict):
+                model_version = configs.get("model_version", "base")
+                provider = configs.get("provider", provider)
+                model = configs.get("model", model)
+                max_candidates = configs.get("max_candidates", max_candidates)
+                max_rounds = configs.get("max_rounds", max_rounds)
+                use_local_classifier = configs.get("use_local_classifier", use_local_classifier)
+                target = configs.get("target", target)
+                language = configs.get("language", language)
+                enable_cbmc = configs.get("enable_cbmc", enable_cbmc)
+                cbmc_path = configs.get("cbmc_path", cbmc_path)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
         cfg = PipelineConfig(
-            provider           = args.provider,
-            model              = args.model,
+            provider           = provider,
+            model              = model,
             model_version      = model_version,
-            max_t2_candidates  = args.max_candidates,
-            max_critique_rounds= args.max_rounds,
+            max_t2_candidates  = max_candidates,
+            max_critique_rounds= max_rounds,
             enable_proof       = args.enable_proof,
-            enable_cbmc        = args.enable_cbmc,
-            cbmc_path          = args.cbmc_path,
+            enable_cbmc        = enable_cbmc,
+            cbmc_path          = cbmc_path,
             enable_tsan        = (os.name != "nt"),   # auto-disabled on Windows
             proof_corpus_path  = args.proof_corpus,
             reward_events_path = args.reward_events,
             verbose            = True,                # logs go to stderr
+            use_local_classifier = use_local_classifier,
+            target             = target,
+            language           = language,
             job_id             = payload.get("id", ""),
+            source_file        = payload.get("file_path", ""),
         )
 
         try:
@@ -114,6 +148,7 @@ def main() -> int:
         proof_corpus_path  = args.proof_corpus,
         reward_events_path = args.reward_events,
         source_file        = args.source,
+        language           = args.language,
         verbose            = False,
     )
 

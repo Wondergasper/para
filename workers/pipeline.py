@@ -25,6 +25,7 @@ Pipeline config (all tuneable via PipelineConfig):
 """
 
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -64,6 +65,7 @@ class PipelineConfig:
     job_id:              str   = ""           # Optional job identifier for log prefixing
     source_file:         str   = ""           # Optional C source file path for compilation context
     target:              str   = "openmp"     # Target platform: openmp | openmp-target | cuda
+    language:            str   = "c"          # Target language: c | fortran | python | rust
 
 
 # ── Pipeline result ─────────────────────────────────────────────────────────────
@@ -85,6 +87,7 @@ class PipelineResult:
     rounds:         int   = 0
     elapsed_sec:    float = 0.0
     error:          str   = ""
+    diff:           str   = ""
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -113,9 +116,20 @@ def _verify_candidate_task(
     Task to verify a single candidate, optionally generating a proof first.
     Returns (index, candidate, result).
     """
-    # Optional: generate Lean 4 proof for Gate 4
+    # Detect language
+    lang = cfg.language or "c"
+    if cfg.source_file and cfg.language == "c":
+        ext = os.path.splitext(cfg.source_file)[1].lower()
+        if ext in (".f90", ".f95", ".f", ".for", ".f03", ".f08"):
+            lang = "fortran"
+        elif ext == ".py":
+            lang = "python"
+        elif ext in (".rs", ".rust"):
+            lang = "rust"
+
+    # Optional: generate Lean 4 proof for Gate 4 (C only)
     lean_code = None
-    if cfg.enable_proof:
+    if lang == "c" and cfg.enable_proof:
         try:
             lean_code = generate_proof(
                 source_code, candidate, dep_graph, annotated_ir,
@@ -124,18 +138,25 @@ def _verify_candidate_task(
         except RuntimeError:
             lean_code = None
 
-    ver = verify_candidate(
-        candidate_code=candidate,
-        reference_code=source_code,
-        func_name=func_name,
-        test_inputs=test_inputs,
-        lean_code=lean_code,
-        enable_tsan=cfg.enable_tsan,
-        enable_cbmc=cfg.enable_cbmc,
-        cbmc_path=cfg.cbmc_path,
-        enable_proof=cfg.enable_proof,
-        target=cfg.target,
-    )
+    from workers.lang import get_driver
+    driver = get_driver(lang)
+    if lang == "c" or lang == "c++":
+        ver = driver.verify_candidate(
+            candidate_code=candidate,
+            reference_code=source_code,
+            func_name=func_name,
+            test_inputs=test_inputs,
+            cfg=cfg,
+            lean_code=lean_code,
+        )
+    else:
+        ver = driver.verify_candidate(
+            candidate_code=candidate,
+            reference_code=source_code,
+            func_name=func_name,
+            test_inputs=test_inputs,
+            cfg=cfg,
+        )
 
     with _record_lock:
         maybe_record_proof(
@@ -178,23 +199,97 @@ def run(
     result     = PipelineResult()
     start      = time.time()
 
+    # ── Preprocessing & Safety Checks ─────────────────────────────────────────
+    # Detect language
+    lang = cfg.language or "c"
+    if cfg.source_file and cfg.language == "c":
+        ext = os.path.splitext(cfg.source_file)[1].lower()
+        if ext in (".f90", ".f95", ".f", ".for", ".f03", ".f08"):
+            lang = "fortran"
+        elif ext == ".py":
+            lang = "python"
+        elif ext in (".rs", ".rust"):
+            lang = "rust"
+            
+    from workers.lang import get_driver
+    driver = get_driver(lang)
+
+    # 1. Extract target function name dynamically if not provided or default
+    func_name = driver.detect_func_name(source_code, func_name)
+    
+    # 2. Rename main() or program main to prevent conflicts
+    source_code = driver.rename_main(source_code)
+    
+    # 3. Extract function declarations
+    funcs = driver.extract_functions(source_code)
+    target_func = None
+    if funcs:
+        for f in funcs:
+            if f["name"] == func_name:
+                target_func = f
+                break
+        if not target_func and (func_name == "func" or func_name == ""):
+            target_func = funcs[0]
+            func_name = target_func["name"]
+
+    # 4. Analyze target function loops for parallel validity
+    code_to_check = target_func["body"] if target_func else source_code
+    safety = driver.analyze_loops(code_to_check)
+    if not safety["safe_for_openmp"]:
+        _log(f"  Loop safety issues detected: {', '.join(safety['issues'])}", cfg.verbose, cfg.job_id)
+        result.annotated_ir = {
+            "type": "sequential",
+            "summary": f"Loop guard warning: {', '.join(safety['issues'])}",
+            "dependencies": {"RAW": [], "WAR": [], "WAW": []},
+            "reduction_variables": []
+        }
+        result.error = f"Loop safety violation: {', '.join(safety['issues'])}"
+        result.elapsed_sec = time.time() - start
+        return result
+
+    # Isolated context code for LLMs
+    code_to_parallelize = target_func["full"] if target_func else source_code
+
+    # Additional: warn if source has I/O in any context
+    if any(token in source_code for token in ("scanf", "printf", "fopen", "fwrite", "fread", "system(", "exec(")):
+        if "warnings" not in annotated_ir:
+            annotated_ir["warnings"] = []
+        annotated_ir["warnings"].append(
+            "Source contains I/O or system calls. Parallelisation may produce non-deterministic output."
+        )
+
     # ──────────────────────────────────────────────────────────────────────────
     # LAYER 1 — T1 Analysis
     # ──────────────────────────────────────────────────────────────────────────
     _log("Layer 1: Running T1 analysis...", cfg.verbose, cfg.job_id)
     try:
         if cfg.use_local_classifier:
-            annotated_ir = classify_region(source_code)
+            annotated_ir = classify_region(code_to_parallelize)
         else:
-            annotated_ir = analyse(source_code, provider=cfg.provider, model=active_model, source_file=cfg.source_file)
+            annotated_ir = analyse(code_to_parallelize, provider=cfg.provider, model=active_model, source_file=cfg.source_file)
     except (ValueError, RuntimeError) as e:
         if cfg.use_local_classifier:
             result.error = f"T1 analysis failed: {e}"
             _log(f"✗ {result.error}", cfg.verbose, cfg.job_id)
             result.elapsed_sec = time.time() - start
             return result
-        annotated_ir = classify_region(source_code)
+        annotated_ir = classify_region(code_to_parallelize)
         _log("  T1 LLM analysis failed; used Phase 2 local classifier.", cfg.verbose, cfg.job_id)
+
+    # Inject warning if ThreadSanitizer checks are skipped due to Windows limitations
+    if not cfg.enable_tsan or os.name == "nt":
+        if "warnings" not in annotated_ir:
+            annotated_ir["warnings"] = []
+        warning_msg = "ThreadSanitizer disabled on Windows. Race detection bypassed."
+        if warning_msg not in annotated_ir["warnings"]:
+            annotated_ir["warnings"].append(warning_msg)
+
+    # Auto-enable CBMC on Windows as TSAN substitute
+    if os.name == "nt" and not cfg.enable_cbmc:
+        import shutil
+        if shutil.which("cbmc"):
+            cfg.enable_cbmc = True
+            _log("  CBMC auto-enabled on Windows (TSAN unavailable).", cfg.verbose, cfg.job_id)
 
     result.annotated_ir = annotated_ir
     _log(f"  Type: {annotated_ir['type']} | Summary: {annotated_ir['summary']}", cfg.verbose, cfg.job_id)
@@ -223,13 +318,14 @@ def run(
         # ── T2: Generate candidates ────────────────────────────────────────────
         try:
             candidates = generate_candidate_pool(
-                source_code=source_code,
+                source_code=code_to_parallelize,
                 dep_graph=dep_graph,
                 annotated_ir=annotated_ir,
                 error_trace=error_trace,
                 provider=cfg.provider,
                 model=active_model,
                 max_llm_candidates=cfg.max_t2_candidates,
+                round_num=round_num,
                 target=cfg.target,
             )
         except RuntimeError as e:
@@ -321,6 +417,19 @@ def run(
     result.best_candidate = best_candidate
     result.success        = best_score >= cfg.score_threshold
     result.elapsed_sec    = time.time() - start
+
+    if result.best_candidate:
+        import difflib
+        orig_code = target_func["full"] if target_func else source_code
+        orig_lines = orig_code.splitlines(keepends=True)
+        cand_lines = result.best_candidate.splitlines(keepends=True)
+        diff_lines = list(difflib.unified_diff(
+            orig_lines,
+            cand_lines,
+            fromfile=f"original/{func_name}",
+            tofile=f"parallel/{func_name}"
+        ))
+        result.diff = "".join(diff_lines)
 
     _log(f"\n{'='*50}", cfg.verbose, cfg.job_id)
     _log(f"Pipeline complete in {result.elapsed_sec:.1f}s", cfg.verbose, cfg.job_id)

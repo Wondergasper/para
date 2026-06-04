@@ -92,15 +92,17 @@ def analyse(
     provider: str = "ollama",
     model: str = None,
     source_file: str = "",
+    language: str = "c",
 ) -> dict:
     """
-    Run T1 analysis on a C function.
+    Run T1 analysis on a function.
 
     Args:
-        source_code: The C function to analyse.
+        source_code: The function to analyse.
         provider:    LLM provider ("ollama" | "groq" | "gemini").
         model:       Model override (uses provider default if None).
-        source_file: Optional source C file path for compilation database checks.
+        source_file: Optional source file path for compilation database checks.
+        language:    The source file language.
 
     Returns:
         Parsed AnnotatedIR dict.
@@ -109,15 +111,20 @@ def analyse(
         ValueError:   If the LLM response is not valid JSON.
         RuntimeError: If the LLM call fails.
     """
-    from workers.code_understanding.clang_analyzer import is_clang_available, analyse_with_clang
-    if is_clang_available():
-        try:
-            return analyse_with_clang(source_code, source_file=source_file)
-        except Exception:
-            pass
+    # Clang static analysis is C/C++ specific
+    if language in ("c", "c++"):
+        from workers.code_understanding.clang_analyzer import is_clang_available, analyse_with_clang
+        if is_clang_available():
+            try:
+                return analyse_with_clang(source_code, source_file=source_file)
+            except Exception:
+                pass
 
-    prompt   = build_t1_prompt(source_code)
-    raw      = generate(prompt, SYSTEM_PROMPT_T1, provider, model, temp=0.1)
+    from workers.lang import get_driver
+    driver = get_driver(language)
+    prompt = driver.get_t1_prompt(source_code)
+    sys_prompt = driver.get_t1_system_prompt()
+    raw = generate(prompt, sys_prompt, provider, model, temp=0.1)
 
     # Strip markdown fences if the model wraps output despite instructions
     cleaned  = raw.strip()

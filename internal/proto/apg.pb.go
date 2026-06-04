@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v5.29.3
-// source: apg.proto
+// source: proto/apg.proto
 
 package proto
 
@@ -34,7 +34,7 @@ type JobRequest struct {
 
 func (x *JobRequest) Reset() {
 	*x = JobRequest{}
-	mi := &file_apg_proto_msgTypes[0]
+	mi := &file_proto_apg_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -46,7 +46,7 @@ func (x *JobRequest) String() string {
 func (*JobRequest) ProtoMessage() {}
 
 func (x *JobRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_apg_proto_msgTypes[0]
+	mi := &file_proto_apg_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -59,7 +59,7 @@ func (x *JobRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobRequest.ProtoReflect.Descriptor instead.
 func (*JobRequest) Descriptor() ([]byte, []int) {
-	return file_apg_proto_rawDescGZIP(), []int{0}
+	return file_proto_apg_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *JobRequest) GetId() string {
@@ -109,7 +109,7 @@ type Attempt struct {
 
 func (x *Attempt) Reset() {
 	*x = Attempt{}
-	mi := &file_apg_proto_msgTypes[1]
+	mi := &file_proto_apg_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -121,7 +121,7 @@ func (x *Attempt) String() string {
 func (*Attempt) ProtoMessage() {}
 
 func (x *Attempt) ProtoReflect() protoreflect.Message {
-	mi := &file_apg_proto_msgTypes[1]
+	mi := &file_proto_apg_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -134,7 +134,7 @@ func (x *Attempt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Attempt.ProtoReflect.Descriptor instead.
 func (*Attempt) Descriptor() ([]byte, []int) {
-	return file_apg_proto_rawDescGZIP(), []int{1}
+	return file_proto_apg_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *Attempt) GetCandidate() string {
@@ -175,13 +175,14 @@ type JobResponse struct {
 	Rounds          int32                  `protobuf:"varint,6,opt,name=rounds,proto3" json:"rounds,omitempty"`
 	Error           string                 `protobuf:"bytes,7,opt,name=error,proto3" json:"error,omitempty"`
 	Attempts        []*Attempt             `protobuf:"bytes,8,rep,name=attempts,proto3" json:"attempts,omitempty"`
+	Diff            string                 `protobuf:"bytes,9,opt,name=diff,proto3" json:"diff,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
 
 func (x *JobResponse) Reset() {
 	*x = JobResponse{}
-	mi := &file_apg_proto_msgTypes[2]
+	mi := &file_proto_apg_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -193,7 +194,7 @@ func (x *JobResponse) String() string {
 func (*JobResponse) ProtoMessage() {}
 
 func (x *JobResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_apg_proto_msgTypes[2]
+	mi := &file_proto_apg_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -206,7 +207,7 @@ func (x *JobResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobResponse.ProtoReflect.Descriptor instead.
 func (*JobResponse) Descriptor() ([]byte, []int) {
-	return file_apg_proto_rawDescGZIP(), []int{2}
+	return file_proto_apg_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *JobResponse) GetId() string {
@@ -265,11 +266,18 @@ func (x *JobResponse) GetAttempts() []*Attempt {
 	return nil
 }
 
-var File_apg_proto protoreflect.FileDescriptor
+func (x *JobResponse) GetDiff() string {
+	if x != nil {
+		return x.Diff
+	}
+	return ""
+}
 
-const file_apg_proto_rawDesc = "" +
+var File_proto_apg_proto protoreflect.FileDescriptor
+
+const file_proto_apg_proto_rawDesc = "" +
 	"\n" +
-	"\tapg.proto\x12\x03apg\"\x93\x01\n" +
+	"\x0fproto/apg.proto\x12\x03apg\"\x93\x01\n" +
 	"\n" +
 	"JobRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
@@ -281,7 +289,7 @@ const file_apg_proto_rawDesc = "" +
 	"\tcandidate\x18\x01 \x01(\tR\tcandidate\x12\x14\n" +
 	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x12\n" +
 	"\x04gate\x18\x03 \x01(\tR\x04gate\x12\x14\n" +
-	"\x05error\x18\x04 \x01(\tR\x05error\"\xf8\x01\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x8c\x02\n" +
 	"\vJobResponse\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x18\n" +
 	"\asuccess\x18\x02 \x01(\bR\asuccess\x12\x14\n" +
@@ -290,27 +298,28 @@ const file_apg_proto_rawDesc = "" +
 	"\x11annotated_ir_json\x18\x05 \x01(\tR\x0fannotatedIrJson\x12\x16\n" +
 	"\x06rounds\x18\x06 \x01(\x05R\x06rounds\x12\x14\n" +
 	"\x05error\x18\a \x01(\tR\x05error\x12(\n" +
-	"\battempts\x18\b \x03(\v2\f.apg.AttemptR\battemptsB\x14Z\x12apg/internal/protob\x06proto3"
+	"\battempts\x18\b \x03(\v2\f.apg.AttemptR\battempts\x12\x12\n" +
+	"\x04diff\x18\t \x01(\tR\x04diffB\x14Z\x12apg/internal/protob\x06proto3"
 
 var (
-	file_apg_proto_rawDescOnce sync.Once
-	file_apg_proto_rawDescData []byte
+	file_proto_apg_proto_rawDescOnce sync.Once
+	file_proto_apg_proto_rawDescData []byte
 )
 
-func file_apg_proto_rawDescGZIP() []byte {
-	file_apg_proto_rawDescOnce.Do(func() {
-		file_apg_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_apg_proto_rawDesc), len(file_apg_proto_rawDesc)))
+func file_proto_apg_proto_rawDescGZIP() []byte {
+	file_proto_apg_proto_rawDescOnce.Do(func() {
+		file_proto_apg_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_apg_proto_rawDesc), len(file_proto_apg_proto_rawDesc)))
 	})
-	return file_apg_proto_rawDescData
+	return file_proto_apg_proto_rawDescData
 }
 
-var file_apg_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
-var file_apg_proto_goTypes = []any{
+var file_proto_apg_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_proto_apg_proto_goTypes = []any{
 	(*JobRequest)(nil),  // 0: apg.JobRequest
 	(*Attempt)(nil),     // 1: apg.Attempt
 	(*JobResponse)(nil), // 2: apg.JobResponse
 }
-var file_apg_proto_depIdxs = []int32{
+var file_proto_apg_proto_depIdxs = []int32{
 	1, // 0: apg.JobResponse.attempts:type_name -> apg.Attempt
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
@@ -319,26 +328,26 @@ var file_apg_proto_depIdxs = []int32{
 	0, // [0:1] is the sub-list for field type_name
 }
 
-func init() { file_apg_proto_init() }
-func file_apg_proto_init() {
-	if File_apg_proto != nil {
+func init() { file_proto_apg_proto_init() }
+func file_proto_apg_proto_init() {
+	if File_proto_apg_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_apg_proto_rawDesc), len(file_apg_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_apg_proto_rawDesc), len(file_proto_apg_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_apg_proto_goTypes,
-		DependencyIndexes: file_apg_proto_depIdxs,
-		MessageInfos:      file_apg_proto_msgTypes,
+		GoTypes:           file_proto_apg_proto_goTypes,
+		DependencyIndexes: file_proto_apg_proto_depIdxs,
+		MessageInfos:      file_proto_apg_proto_msgTypes,
 	}.Build()
-	File_apg_proto = out.File
-	file_apg_proto_goTypes = nil
-	file_apg_proto_depIdxs = nil
+	File_proto_apg_proto = out.File
+	file_proto_apg_proto_goTypes = nil
+	file_proto_apg_proto_depIdxs = nil
 }

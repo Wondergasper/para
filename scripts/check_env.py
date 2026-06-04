@@ -109,7 +109,10 @@ def check_binaries() -> bool:
             _ok(f"cbmc        found at {cbmc}")
     else:
         _warn("cbmc        not found - Gate 3b (bounded model check) will be skipped")
-        _info("Install: https://github.com/diffblue/cbmc/releases")
+        _info("Install: apt install cbmc  (Linux)")
+        _info("         choco install cbmc  (Windows, via Chocolatey)")
+        _info("         brew install cbmc  (macOS)")
+
 
     # Lean 4 (optional)
     lean = shutil.which("lean")

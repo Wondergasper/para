@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -44,7 +45,7 @@ func NewLocalQueue() (*LocalQueue, error) {
 	return &LocalQueue{
 		python:     py,
 		repoRoot:   root,
-		maxTimeout: 15 * time.Minute, // generous; Ollama can be slow
+		maxTimeout: 3 * time.Minute, // generous; Ollama can be slow
 	}, nil
 }
 
@@ -99,6 +100,7 @@ func (q *LocalQueue) runPipeline(req *proto.JobRequest) *proto.JobResponse {
 		"source":        req.Source,
 		"func_name":     req.FuncName,
 		"model_version": req.ModelVersion,
+		"file_path":     req.FilePath,
 	})
 	if err != nil {
 		return errResp(jobID, fmt.Sprintf("failed to marshal job payload: %v", err))
@@ -120,6 +122,7 @@ func (q *LocalQueue) runPipeline(req *proto.JobRequest) *proto.JobResponse {
 	cmd.Env = append(os.Environ(),
 		fmt.Sprintf("APG_JOB_ID=%s", jobID),
 		"PYTHONUNBUFFERED=1", // ensures Python doesn't buffer stderr
+		"PYTHONIOENCODING=utf-8",
 	)
 
 	var stdout, stderr bytes.Buffer
@@ -153,10 +156,24 @@ func (q *LocalQueue) runPipeline(req *proto.JobRequest) *proto.JobResponse {
 		return errResp(jobID, "pipeline produced no output — check that Ollama is running and the model is loaded")
 	}
 
-	// Find the last valid JSON object in stdout (pipeline may print logs before the final JSON)
-	jsonStart := bytes.LastIndex(outBytes, []byte("{"))
-	if jsonStart >= 0 {
-		outBytes = outBytes[jsonStart:]
+	// Find the line that represents the JSON result (starts with '{' and ends with '}')
+	var jsonBytes []byte
+	for _, line := range splitLines(string(outBytes)) {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") {
+			jsonBytes = []byte(trimmed)
+			break
+		}
+	}
+
+	if len(jsonBytes) == 0 {
+		// Fallback to old heuristic if no single line matches
+		jsonStart := bytes.LastIndex(outBytes, []byte("{"))
+		if jsonStart >= 0 {
+			jsonBytes = outBytes[jsonStart:]
+		} else {
+			jsonBytes = outBytes
+		}
 	}
 
 	var result struct {
@@ -173,7 +190,7 @@ func (q *LocalQueue) runPipeline(req *proto.JobRequest) *proto.JobResponse {
 			Error     string  `json:"error"`
 		} `json:"attempts"`
 	}
-	if err := json.Unmarshal(outBytes, &result); err != nil {
+	if err := json.Unmarshal(jsonBytes, &result); err != nil {
 		log.Printf("[local-queue][%s] JSON parse error: %v\nraw stdout: %s", jobID, err, string(stdout.Bytes()))
 		return errResp(jobID, fmt.Sprintf("failed to parse pipeline output: %v\nraw: %.500s", err, string(stdout.Bytes())))
 	}

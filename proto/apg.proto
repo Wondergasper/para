@@ -28,4 +28,5 @@ message JobResponse {
   int32 rounds = 6;
   string error = 7;
   repeated Attempt attempts = 8;
+  string diff = 9;
 }

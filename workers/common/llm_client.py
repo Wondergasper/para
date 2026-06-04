@@ -40,7 +40,7 @@ PROVIDERS = {
     "gemini": {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_key":  os.getenv("GEMINI_API_KEY", ""),
-        "default_model": "gemini-1.5-flash",
+        "default_model": "gemini-2.5-flash",
     },
 }
 
@@ -59,8 +59,14 @@ def get_client(provider: str = "ollama"):
         )
 
     cfg = PROVIDERS[provider]
+    api_key = cfg.get("api_key")
+    if not api_key:
+        if provider == "groq":
+            api_key = os.getenv("GROQ_API_KEY", "")
+        elif provider == "gemini":
+            api_key = os.getenv("GEMINI_API_KEY", "")
 
-    if not cfg["api_key"]:
+    if not api_key:
         raise EnvironmentError(
             f"API key for '{provider}' is missing. "
             f"Set the corresponding environment variable."
@@ -74,7 +80,7 @@ def get_client(provider: str = "ollama"):
             "Install Phase 1 dependencies with: pip install openai"
         ) from exc
 
-    return OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
+    return OpenAI(base_url=cfg["base_url"], api_key=api_key)
 
 
 # ── Main generate function ─────────────────────────────────────────────────────

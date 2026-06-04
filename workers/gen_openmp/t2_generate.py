@@ -192,23 +192,32 @@ def generate_parallel(
     provider:     str  = "ollama",
     model:        str  = None,
     max_retries:  int  = 3,
+    round_num:    int  = 1,
     target:       str  = "openmp",
+    language:     str  = "c",
 ) -> list[str]:
     """
-    Generate OpenMP or GPU parallelised C/CUDA code using batch LLM inference.
+    Generate parallelised code using batch LLM inference.
     """
-    prompt = build_t2_prompt(
-        source_code, dep_graph,
-        error_trace=error_trace,
-        annotated_ir=annotated_ir,
-    )
+    from workers.lang import get_driver
+    driver = get_driver(language)
+    system_prompt = driver.get_t2_system_prompt(target)
 
-    if target == "cuda":
-        system_prompt = SYSTEM_PROMPT_CUDA
-    elif target == "openmp-target":
-        system_prompt = SYSTEM_PROMPT_OPENMP_TARGET
-    else:
-        system_prompt = SYSTEM_PROMPT_T2
+    # Build prompt dynamically using driver
+    lines = [f"Function to parallelise:\n{source_code.strip()}"]
+    lines.append(f"\nDependency graph:\n{json.dumps(dep_graph, indent=2)}")
+    
+    hints = driver.get_t2_prompt_hint(annotated_ir)
+    if hints:
+        lines.append("\n" + hints)
+        
+    if error_trace:
+        lines.append(
+            f"\nPREVIOUS ATTEMPT FAILED. Error was:\n{error_trace.strip()}\n"
+            "Fix the issue described above. Do NOT repeat the same mistake."
+        )
+    lines.append("\nGenerate the parallelised version:")
+    prompt = "\n".join(lines)
 
     # Call generate_batch once to query multiple candidates simultaneously
     raw_responses = generate_batch(
@@ -216,7 +225,7 @@ def generate_parallel(
         system=system_prompt,
         provider=provider,
         model=model,
-        temp=0.2,
+        temp=min(0.2 + (round_num - 1) * 0.15, 0.7),
         n=max_retries,
     )
 
@@ -228,12 +237,11 @@ def generate_parallel(
             end_idx = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
             cleaned = "\n".join(lines[1:end_idx])
 
-        # Basic sanity check: does the output look like C or CUDA code?
-        if any(keyword in cleaned for keyword in ("for", "while", "pragma", "kernel", "cuda", "{")):
+        # Basic sanity check: does the output look like code?
+        if any(keyword in cleaned for keyword in ("for", "while", "pragma", "kernel", "cuda", "{", "def ", "subroutine", "fn ", "do ")):
             candidates.append(cleaned)
 
     if not candidates and raw_responses:
-        # Fallback to returning the raw response if none passed sanity checks
         candidates.append(raw_responses[0])
 
     return candidates
@@ -248,13 +256,15 @@ def generate_candidate_pool(
     model: str = None,
     max_llm_candidates: int = 3,
     llm_generator=generate_parallel,
+    round_num: int = 1,
     target: str = "openmp",
+    language: str = "c",
 ) -> list[str]:
     """
     Phase 2 candidate pool: deterministic CTT candidates first, LLM candidates next.
     """
     candidates = []
-    if target == "openmp":
+    if language in ("c", "c++") and target == "openmp":
         ctt_candidates = generate_ctt_candidates(source_code, annotated_ir or {})
         for cand in ctt_candidates:
             if cand not in candidates:
@@ -270,7 +280,9 @@ def generate_candidate_pool(
             provider=provider,
             model=model,
             max_retries=max_llm_candidates,
+            round_num=round_num,
             target=target,
+            language=language,
         )
     for candidate in llm_candidates:
         if candidate not in candidates:

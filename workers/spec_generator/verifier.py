@@ -833,8 +833,13 @@ def gate_cbmc_model_check(
         with open(src_path, "w", encoding="utf-8") as f:
             f.write(harness)
 
+        args = [resolved_cbmc, src_path, "--unwind", str(array_size + 1), "--bounds-check", "--pointer-check"]
+        # Use GCC as preprocessor if available (critical on Windows when cl.exe/MSVC is not in PATH)
+        if shutil.which("gcc") or os.name == "nt":
+            args.append("--gcc")
+
         result = subprocess.run(
-            [resolved_cbmc, src_path, "--unwind", str(array_size + 1), "--bounds-check", "--pointer-check"],
+            args,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -957,6 +962,7 @@ def verify_candidate(
         result.score = 0.8
     if result.gate_passed in ("race", "cbmc") and not enable_proof:
         result.gate_passed = "all"
+        result.score = 0.8
 
     return result
 
