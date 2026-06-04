@@ -62,6 +62,45 @@ def find_clang() -> str | None:
     return None
 
 
+# ── NVCC discovery ─────────────────────────────────────────────────────────────
+
+def find_nvcc() -> str | None:
+    """Return the path to nvcc compiler, or None if not found."""
+    found = shutil.which("nvcc")
+    if found:
+        return found
+    if os.name == "nt":
+        import glob
+        base_dir = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+        if os.path.isdir(base_dir):
+            matches = glob.glob(os.path.join(base_dir, "v*", "bin", "nvcc.exe"))
+            if matches:
+                return matches[0]
+        user_profile = os.environ.get("USERPROFILE")
+        if user_profile:
+            p = os.path.join(user_profile, ".elan", "bin", "nvcc.exe")
+            if os.path.isfile(p):
+                return p
+    return None
+
+
+WINDOWS_LEAN_PATHS = [
+    os.path.join(os.environ.get("USERPROFILE", "C:\\Users\\USER"), ".elan", "bin", "lean.exe"),
+]
+
+
+def find_lean() -> str | None:
+    """Return the path to lean compiler, or None if not found."""
+    found = shutil.which("lean")
+    if found:
+        return found
+    if os.name == "nt":
+        for p in WINDOWS_LEAN_PATHS:
+            if os.path.isfile(p):
+                return p
+    return None
+
+
 def is_docker_functional() -> bool:
     """Return True if Docker is installed and running."""
     try:
@@ -110,6 +149,10 @@ OUTPUT_HARNESS_BASE = textwrap.dedent("""
 #include <string.h>
 #ifdef _OPENMP
 #include <omp.h>
+#define GET_TIME() omp_get_wtime()
+#else
+#include <time.h>
+#define GET_TIME() ((double)clock() / CLOCKS_PER_SEC)
 #endif
 
 {reference_code}
@@ -146,8 +189,15 @@ int main(void) {{
 
 {allocations}
 
+    double start_ref = GET_TIME();
     {ref_call}
+    double end_ref = GET_TIME();
+    double time_ref = end_ref - start_ref;
+
+    double start_par = GET_TIME();
     {par_call}
+    double end_par = GET_TIME();
+    double time_par = end_par - start_par;
 
     for (int i = 0; i < N; i++) {{
 {diff_checks}
@@ -156,7 +206,7 @@ int main(void) {{
 {frees}
 
     if (max_diff < 1e-4) {{
-        printf("PASS max_diff=%.2e\\n", max_diff);
+        printf("PASS max_diff=%.2e time_ref=%.6f time_par=%.6f\\n", max_diff, time_ref, time_par);
         return 0;
     }}
     printf("FAIL max_diff=%.2e\\n", max_diff);
@@ -450,18 +500,42 @@ def build_tsan_harness(candidate_code: str, func_name: str) -> str:
     )
 
 
-def gate_compile(candidate_code: str, timeout: int = 30) -> tuple[bool, str]:
+def gate_compile(candidate_code: str, target: str = "openmp", timeout: int = 30) -> tuple[bool, str]:
     """
-    Gate 1: Attempt to compile the candidate with GCC + OpenMP.
+    Gate 1: Attempt to compile the candidate.
     Returns (ok, error_message).
     """
+    if target == "cuda":
+        nvcc = find_nvcc()
+        if not nvcc:
+            return False, "nvcc not found. Install NVIDIA CUDA Toolkit."
+
+        harness = COMPILE_HARNESS.format(candidate_code=candidate_code)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_path = os.path.join(tmpdir, "compile_test.cu")
+            with open(src_path, "w", encoding="utf-8") as f:
+                f.write(harness)
+
+            bin_path = os.path.join(tmpdir, "compile_test")
+            result = subprocess.run(
+                [nvcc, "-O1", src_path, "-o", bin_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+        if result.returncode == 0:
+            return True, ""
+        return False, f"Compile error:\n{result.stderr or result.stdout}"
+
     docker_ok = is_docker_functional()
     gcc = find_gcc()
     
     if not gcc and not docker_ok:
         return False, (
             "GCC not found. Install GCC with OpenMP support:\n"
-            "  Windows: https://www.msys2.org/ → pacman -S mingw-w64-ucrt-x86_64-gcc\n"
+            "  Windows: https://www.msys2.org/ -> pacman -S mingw-w64-ucrt-x86_64-gcc\n"
             "  Linux:   sudo apt install gcc\n"
             "  macOS:   brew install gcc"
         )
@@ -502,17 +576,77 @@ def gate_output_match(
     func_name: str,
     array_size: int = 1024,
     seed: int = 42,
+    target: str = "openmp",
     timeout: int = 30,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, dict]:
+    if target == "cuda":
+        nvcc = find_nvcc()
+        if not nvcc:
+            return False, "nvcc not found — Gate 2 skipped.", {}
+
+        try:
+            harness = build_output_harness(candidate_code, reference_code, func_name, array_size, seed)
+        except ValueError as exc:
+            return False, str(exc), {}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src_path = os.path.join(tmpdir, "test_output.cu")
+            with open(src_path, "w", encoding="utf-8") as f:
+                f.write(harness)
+
+            bin_path = os.path.join(tmpdir, "test_output")
+            compile_result = subprocess.run(
+                [nvcc, "-O1", src_path, "-o", bin_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            if compile_result.returncode != 0:
+                return False, f"Harness compile error:\n{compile_result.stderr or compile_result.stdout}", {}
+
+            run_result = subprocess.run(
+                [bin_path],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+
+            output = (run_result.stdout or "").strip()
+            if "PASS" not in output:
+                return False, f"Output mismatch: {output or run_result.stderr or run_result.stdout}", {}
+
+            # Parse timing: time_ref=%.6f time_par=%.6f
+            time_ref, time_par = 0.0, 0.0
+            match = re.search(r"time_ref=([0-9.]+) time_par=([0-9.]+)", output)
+            if match:
+                time_ref = float(match.group(1))
+                time_par = float(match.group(2))
+
+            speedup = time_ref / time_par if time_par > 0 else 1.0
+            autotuning_results = {
+                "runs": [{
+                    "threads": 1,
+                    "time_ref": time_ref,
+                    "time_par": time_par,
+                    "speedup": speedup
+                }],
+                "best_threads": 1,
+                "best_speedup": speedup,
+                "best_time_par": time_par,
+                "time_ref": time_ref
+            }
+
+        return True, "", autotuning_results
+
     docker_ok = is_docker_functional()
     gcc = find_gcc()
     if not gcc and not docker_ok:
-        return False, "GCC not found — Gate 2 skipped."
+        return False, "GCC not found — Gate 2 skipped.", {}
 
     try:
         harness = build_output_harness(candidate_code, reference_code, func_name, array_size, seed)
     except ValueError as exc:
-        return False, str(exc)
+        return False, str(exc), {}
 
     with tempfile.TemporaryDirectory() as tmpdir:
         src_path = os.path.join(tmpdir, "test_output.c")
@@ -527,14 +661,7 @@ def gate_output_match(
                 timeout=timeout,
             )
             if compile_result.returncode != 0:
-                return False, f"Harness compile error:\n{compile_result.stderr or compile_result.stdout}"
-
-            run_result = subprocess.run(
-                ["docker", "run", "--rm", "-v", f"{os.path.abspath(tmpdir)}:/app", "-w", "/app", "--network", "none", "--cpus", "0.5", "-m", "128m", "-e", "OMP_NUM_THREADS=4", "gcc", "./test_output"],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
+                return False, f"Harness compile error:\n{compile_result.stderr or compile_result.stdout}", {}
         else:
             bin_path = os.path.join(tmpdir, "test_output")
             compile_result = subprocess.run(
@@ -544,20 +671,67 @@ def gate_output_match(
                 timeout=timeout,
             )
             if compile_result.returncode != 0:
-                return False, f"Harness compile error:\n{compile_result.stderr}"
+                return False, f"Harness compile error:\n{compile_result.stderr}", {}
 
-            run_result = subprocess.run(
-                [bin_path],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-                env={**os.environ, "OMP_NUM_THREADS": "4"},
-            )
+        # Autotuning Loop: evaluate thread counts from 1 to 8
+        thread_counts = [1, 2, 4, 8]
+        runs = []
+        best_speedup = -1.0
+        best_threads = 1
+        best_time_par = 0.0
+        best_time_ref = 0.0
 
-    output = (run_result.stdout or "").strip()
-    if "PASS" in output:
-        return True, ""
-    return False, f"Output mismatch: {output or run_result.stderr or run_result.stdout}"
+        for T in thread_counts:
+            if docker_ok:
+                run_result = subprocess.run(
+                    ["docker", "run", "--rm", "-v", f"{os.path.abspath(tmpdir)}:/app", "-w", "/app", "--network", "none", "--cpus", "0.5", "-m", "128m", "-e", f"OMP_NUM_THREADS={T}", "gcc", "./test_output"],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                )
+            else:
+                run_result = subprocess.run(
+                    [bin_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env={**os.environ, "OMP_NUM_THREADS": str(T)},
+                )
+
+            output = (run_result.stdout or "").strip()
+            if "PASS" not in output:
+                return False, f"Output mismatch at thread count {T}: {output or run_result.stderr or run_result.stdout}", {}
+
+            # Parse timing: time_ref=%.6f time_par=%.6f
+            time_ref, time_par = 0.0, 0.0
+            match = re.search(r"time_ref=([0-9.]+) time_par=([0-9.]+)", output)
+            if match:
+                time_ref = float(match.group(1))
+                time_par = float(match.group(2))
+
+            speedup = time_ref / time_par if time_par > 0 else 1.0
+            runs.append({
+                "threads": T,
+                "time_ref": time_ref,
+                "time_par": time_par,
+                "speedup": speedup
+            })
+
+            if speedup > best_speedup or best_speedup < 0:
+                best_speedup = speedup
+                best_threads = T
+                best_time_par = time_par
+                best_time_ref = time_ref
+
+        autotuning_results = {
+            "runs": runs,
+            "best_threads": best_threads,
+            "best_speedup": best_speedup,
+            "best_time_par": best_time_par,
+            "time_ref": best_time_ref
+        }
+
+    return True, "", autotuning_results
 
 
 # ── Gate 3: Race freedom (TSAN) ────────────────────────────────────────────────
@@ -675,7 +849,8 @@ def gate_cbmc_model_check(
 # ── Gate 4: Lean 4 formal proof ────────────────────────────────────────────────
 
 def gate_formal_proof(lean_code: str, timeout: int = 60) -> tuple[bool, str]:
-    if shutil.which("lean") is None:
+    lean_exe = find_lean()
+    if not lean_exe:
         return False, "Lean 4 not available — gate 4 skipped (soft miss)"
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -683,7 +858,7 @@ def gate_formal_proof(lean_code: str, timeout: int = 60) -> tuple[bool, str]:
         with open(lean_path, "w", encoding="utf-8") as f:
             f.write(lean_code)
 
-        result = subprocess.run(["lean", lean_path], capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run([lean_exe, lean_path], capture_output=True, text=True, timeout=timeout)
 
     if result.returncode == 0:
         return True, ""
@@ -702,13 +877,14 @@ def verify_candidate(
     enable_cbmc: bool = False,
     cbmc_path: str = "cbmc",
     enable_proof: bool = False,
+    target: str = "openmp",
 ) -> VerificationResult:
     result = VerificationResult()
     test_inputs = test_inputs or [{"N": 1024, "seed": 42}]
 
     # Gate 1: Compile
     result.gate_reached = "compile"
-    ok, err = gate_compile(candidate_code)
+    ok, err = gate_compile(candidate_code, target=target)
     if not ok:
         result.error = err
         return result
@@ -719,13 +895,16 @@ def verify_candidate(
 
     # Gate 2: Output match
     result.gate_reached = "output"
-    ok, err = gate_output_match(
+    ok, err, autotuning_results = gate_output_match(
         candidate_code,
         reference_code,
         func_name,
         array_size=test_inputs[0].get("N", 1024),
         seed=test_inputs[0].get("seed", 42),
+        target=target,
     )
+    if autotuning_results:
+        result.details["autotuning"] = autotuning_results
     if not ok:
         result.error = err
         return result
@@ -735,7 +914,7 @@ def verify_candidate(
     result.score = 0.6
 
     # Gate 3: Race freedom (TSAN)
-    if enable_tsan:
+    if enable_tsan and target != "cuda":
         result.gate_reached = "race"
         ok, err = gate_race_freedom(candidate_code)
         if not ok:
@@ -746,7 +925,7 @@ def verify_candidate(
         result.score = 0.8
 
     # Gate 3b: CBMC
-    if enable_cbmc:
+    if enable_cbmc and target != "cuda":
         result.gate_reached = "cbmc"
         ok, err = gate_cbmc_model_check(
             candidate_code,
@@ -773,8 +952,8 @@ def verify_candidate(
         else:
             result.details["proof_error"] = err
 
-    # Normalise final score when TSAN is disabled
-    if result.gate_passed in ("output",) and not enable_tsan:
+    # Normalise final score when TSAN is disabled or target is CUDA
+    if result.gate_passed in ("output",) and (not enable_tsan or target == "cuda"):
         result.score = 0.8
     if result.gate_passed in ("race", "cbmc") and not enable_proof:
         result.gate_passed = "all"

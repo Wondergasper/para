@@ -121,6 +121,16 @@ def generate_collapse_parallel(source_code: str) -> str | None:
 
 # ── AST-based transforms ───────────────────────────────────────────────────────
 
+def _get_loop_start_node(init_node):
+    if init_node is None:
+        return None
+    if hasattr(init_node, 'decls') and init_node.decls:
+        return init_node.decls[0].init
+    if hasattr(init_node, 'rvalue'):
+        return init_node.rvalue
+    return None
+
+
 def generate_ast_transforms(source_code: str) -> list[str]:
     """Use pycparser AST to generate interchange and tiling candidates."""
     parser = c_parser.CParser()
@@ -134,7 +144,7 @@ def generate_ast_transforms(source_code: str) -> list[str]:
     candidates = []
     nests = find_2d_nests(ast)
 
-    for outer, inner in nests:
+    for idx, (outer, inner) in enumerate(nests):
         # Candidate: Collapse(2)
         collapse_cand = generate_collapse_parallel(source_code)
         if collapse_cand and collapse_cand not in candidates:
@@ -150,9 +160,13 @@ def generate_ast_transforms(source_code: str) -> list[str]:
                 candidates.append(code)
 
         # Candidate: 2D tiling
-        tiled_code = transform_tiling_2d(source_code, outer, inner)
-        if tiled_code and tiled_code not in candidates:
-            candidates.append(tiled_code)
+        tiled_ast = copy.deepcopy(ast)
+        tiled_nests = find_2d_nests(tiled_ast)
+        if idx < len(tiled_nests):
+            tiled_outer, tiled_inner = tiled_nests[idx]
+            tiled_code = transform_tiling_2d(tiled_ast, tiled_outer, tiled_inner)
+            if tiled_code and tiled_code not in candidates:
+                candidates.append(tiled_code)
 
     return candidates
 
@@ -204,25 +218,13 @@ def transform_interchange(ast):
 
 
 def transform_tiling_2d(
-    source_code: str,
+    ast,
     outer_node,
     inner_node,
     tile_size: int = 32,
 ) -> str | None:
     """
-    2D loop tiling via source-level regex transform.
-
-    Transforms:
-        for (int i = 0; i < N; i++)
-          for (int j = 0; j < M; j++)
-            body
-    Into:
-        #pragma omp parallel for schedule(static)
-        for (int ii = 0; ii < N; ii += TILE)
-          for (int jj = 0; jj < M; jj += TILE)
-            for (int i = ii; i < ii+TILE && i < N; i++)
-              for (int j = jj; j < jj+TILE && j < M; j++)
-                body
+    2D loop tiling via AST-aided source-level transform.
     """
     # Extract loop variables from the AST nodes
     outer_var = _get_for_var(outer_node)
@@ -230,42 +232,89 @@ def transform_tiling_2d(
     if not outer_var or not inner_var:
         return None
 
-    # Extract bounds via regex (simplified: handles `i < N` and `i < rows*cols` etc.)
-    outer_bound = _extract_bound(source_code, outer_var)
-    inner_bound = _extract_bound(source_code, inner_var)
-    if not outer_bound or not inner_bound:
-        return None
+    parser = c_parser.CParser()
+    gen = c_generator.CGenerator()
 
     tile = tile_size
     oi, ii = outer_var, inner_var
     oii, jji = f"{oi}t", f"{ii}t"
 
-    tiled = source_code
+    try:
+        # 1. Parse outer tile loop snippet
+        snippet_ot = parser.parse(f"void f() {{ for (int {oii} = 0; {oii} < 0; {oii} += {tile}); }}")
+        ot_for = snippet_ot.ext[0].body.block_items[0]
+        
+        # Set start, bound and operator for outer tile loop
+        ot_start = _get_loop_start_node(outer_node.init)
+        if ot_start:
+            ot_for.init.decls[0].init = copy.deepcopy(ot_start)
+        ot_for.cond.right = copy.deepcopy(outer_node.cond.right)
+        ot_for.cond.op = '<'
+        
+        # 2. Parse inner tile loop snippet
+        snippet_it = parser.parse(f"void f() {{ for (int {jji} = 0; {jji} < 0; {jji} += {tile}); }}")
+        it_for = snippet_it.ext[0].body.block_items[0]
+        
+        # Set start, bound and operator for inner tile loop
+        it_start = _get_loop_start_node(inner_node.init)
+        if it_start:
+            it_for.init.decls[0].init = copy.deepcopy(it_start)
+        it_for.cond.right = copy.deepcopy(inner_node.cond.right)
+        it_for.cond.op = '<'
+        
+        # 3. Parse outer element loop snippet
+        snippet_oe = parser.parse(f"void f() {{ for (int {oi} = {oii}; {oi} < {oii} + {tile} && {oi} < 0; {oi}++); }}")
+        oe_for = snippet_oe.ext[0].body.block_items[0]
+        
+        # Set bound and operator for outer element loop
+        oe_for.cond.right.right = copy.deepcopy(outer_node.cond.right)
+        oe_for.cond.right.op = outer_node.cond.op
+        if outer_node.next:
+            oe_for.next = copy.deepcopy(outer_node.next)
+        
+        # 4. Parse inner element loop snippet
+        snippet_ie = parser.parse(f"void f() {{ for (int {ii} = {jji}; {ii} < {jji} + {tile} && {ii} < 0; {ii}++); }}")
+        ie_for = snippet_ie.ext[0].body.block_items[0]
+        
+        # Set bound and operator for inner element loop
+        ie_for.cond.right.right = copy.deepcopy(inner_node.cond.right)
+        ie_for.cond.right.op = inner_node.cond.op
+        if inner_node.next:
+            ie_for.next = copy.deepcopy(inner_node.next)
 
-    # Replace inner for loop
-    inner_pat = (
-        rf"([ \t]*)for\s*\(\s*int\s+{re.escape(ii)}\s*=[^;]+;[^;]+;[^)]+\)"
-    )
-    inner_replacement = (
-        rf"\1for (int {jji} = 0; {jji} < {inner_bound}; {jji} += {tile})\n"
-        rf"\1  for (int {ii} = {jji}; {ii} < {jji}+{tile} && {ii} < {inner_bound}; {ii}++)"
-    )
-    tiled = re.sub(inner_pat, inner_replacement, tiled, count=1)
+        # Assemble the loop nesting structure
+        ie_for.stmt = copy.deepcopy(inner_node.stmt)
+        oe_for.stmt = c_ast.Compound(block_items=[ie_for])
+        it_for.stmt = c_ast.Compound(block_items=[oe_for])
+        ot_for.stmt = c_ast.Compound(block_items=[it_for])
+        
+        # In-place modify the outer_node in the copied AST
+        outer_node.init = ot_for.init
+        outer_node.cond = ot_for.cond
+        outer_node.next = ot_for.next
+        outer_node.stmt = ot_for.stmt
 
-    # Replace outer for loop
-    outer_pat = (
-        rf"([ \t]*)for\s*\(\s*int\s+{re.escape(oi)}\s*=[^;]+;[^;]+;[^)]+\)"
-    )
-    outer_replacement = (
-        rf"\1#pragma omp parallel for schedule(static)\n"
-        rf"\1for (int {oii} = 0; {oii} < {outer_bound}; {oii} += {tile})\n"
-        rf"\1  for (int {oi} = {oii}; {oi} < {oii}+{tile} && {oi} < {outer_bound}; {oi}++)"
-    )
-    tiled = re.sub(outer_pat, outer_replacement, tiled, count=1)
+        # Generate the C code from AST
+        code = gen.visit(ast)
+        code = _clean_ast_code(code)
+        
+        # Inject the #pragma omp parallel for schedule(static) right before the outer tile loop
+        tiled_pat = rf"([ \t]*)(for\s*\(\s*int\s+{re.escape(oii)}\s*=[^;]+;)"
+        code = re.sub(tiled_pat, rf"\1#pragma omp parallel for schedule(static)\n\1\2", code, count=1)
+        
+        return code
+    except Exception:
+        return None
 
-    if tiled == source_code:
-        return None  # Nothing changed
-    return tiled
+
+def _get_loop_bound_ast(node, gen) -> str | None:
+    """Extract upper bound C code from a For loop's condition using AST generator."""
+    try:
+        if node and node.cond and hasattr(node.cond, 'right'):
+            return gen.visit(node.cond.right).strip()
+    except Exception:
+        pass
+    return None
 
 
 def _get_for_var(node) -> str | None:

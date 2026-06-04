@@ -33,5 +33,20 @@ class TestCTTTransforms(unittest.TestCase):
         has_interchange = any("for (int j = 0;" in c and c.find("for (int j = 0;") < c.find("for (int i = 0;") for c in candidates)
         self.assertTrue(has_interchange, "Should have an interchanged candidate")
 
+    def test_generate_ctt_candidates_tiling_complex_bounds(self):
+        source = """void tiled_kernel(float* A, int rows, int cols) {
+    for (int i = 0; i < rows * cols; i++) {
+        for (int j = 0; j < cols + 10; j++) {
+            A[i * cols + j] = 0.0f;
+        }
+    }
+}"""
+        ir = {"type": "polyhedral", "dependencies": {"RAW": []}}
+        candidates = generate_ctt_candidates(source, ir)
+        
+        has_tiled = any("rows * cols" in c and "cols + 10" in c and "it" in c and "jt" in c for c in candidates)
+        self.assertTrue(has_tiled, "Should successfully generate a 2D tiled loop using the complex bounds extracted via AST")
+
+
 if __name__ == "__main__":
     unittest.main()

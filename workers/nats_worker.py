@@ -96,7 +96,11 @@ async def main():
         verbose=True,
     )
 
-    log.info(f"Worker ready | provider={base_cfg.provider} | tsan={'on' if base_cfg.enable_tsan else 'off (Windows)'}")
+    max_workers_env = os.getenv("APG_MAX_CONCURRENT_JOBS", "")
+    max_workers = int(max_workers_env) if max_workers_env.isdigit() else 4
+    sem = asyncio.Semaphore(max_workers)
+
+    log.info(f"Worker ready | provider={base_cfg.provider} | tsan={'on' if base_cfg.enable_tsan else 'off (Windows)'} | max_concurrent_jobs={max_workers}")
 
     async def handle_job(msg):
         """Process a single job message."""
@@ -114,20 +118,21 @@ async def main():
         # Apply model version routing
         job_cfg = base_cfg
         if req.model_version and req.model_version != "base":
-            job_cfg = replace(base_cfg, model_version=req.model_version, job_id=job_id)
+            job_cfg = replace(base_cfg, model_version=req.model_version, job_id=job_id, source_file=req.file_path)
         else:
-            job_cfg = replace(base_cfg, job_id=job_id)
+            job_cfg = replace(base_cfg, job_id=job_id, source_file=req.file_path)
 
         try:
             # Run the pipeline in a thread executor so it doesn't block the event loop
-            result = await loop.run_in_executor(
-                None,
-                lambda: run(
-                    source_code=req.source,
-                    func_name=req.func_name or "func",
-                    config=job_cfg,
-                ),
-            )
+            async with sem:
+                result = await loop.run_in_executor(
+                    None,
+                    lambda: run(
+                        source_code=req.source,
+                        func_name=req.func_name or "func",
+                        config=job_cfg,
+                    ),
+                )
         except Exception as e:
             log.error(f"[{job_id}] Pipeline exception: {e}")
             resp = apg_pb2.JobResponse(

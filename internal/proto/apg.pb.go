@@ -27,6 +27,7 @@ type JobRequest struct {
 	Source        string                 `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
 	FuncName      string                 `protobuf:"bytes,3,opt,name=func_name,json=funcName,proto3" json:"func_name,omitempty"`
 	ModelVersion  string                 `protobuf:"bytes,4,opt,name=model_version,json=modelVersion,proto3" json:"model_version,omitempty"`
+	FilePath      string                 `protobuf:"bytes,5,opt,name=file_path,json=filePath,proto3" json:"file_path,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -85,6 +86,13 @@ func (x *JobRequest) GetFuncName() string {
 func (x *JobRequest) GetModelVersion() string {
 	if x != nil {
 		return x.ModelVersion
+	}
+	return ""
+}
+
+func (x *JobRequest) GetFilePath() string {
+	if x != nil {
+		return x.FilePath
 	}
 	return ""
 }
@@ -261,13 +269,14 @@ var File_apg_proto protoreflect.FileDescriptor
 
 const file_apg_proto_rawDesc = "" +
 	"\n" +
-	"\tapg.proto\x12\x03apg\"v\n" +
+	"\tapg.proto\x12\x03apg\"\x93\x01\n" +
 	"\n" +
 	"JobRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06source\x18\x02 \x01(\tR\x06source\x12\x1b\n" +
 	"\tfunc_name\x18\x03 \x01(\tR\bfuncName\x12#\n" +
-	"\rmodel_version\x18\x04 \x01(\tR\fmodelVersion\"g\n" +
+	"\rmodel_version\x18\x04 \x01(\tR\fmodelVersion\x12\x1b\n" +
+	"\tfile_path\x18\x05 \x01(\tR\bfilePath\"g\n" +
 	"\aAttempt\x12\x1c\n" +
 	"\tcandidate\x18\x01 \x01(\tR\tcandidate\x12\x14\n" +
 	"\x05score\x18\x02 \x01(\x01R\x05score\x12\x12\n" +

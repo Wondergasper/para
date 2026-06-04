@@ -32,9 +32,7 @@ def generate_lean_skeleton(func_name: str, annotated_ir: dict) -> tuple[str, dic
             type_hint = "Float"
             
     # Structure the skeleton
-    skeleton = f"""import Mathlib.Tactic
-
--- Sequential model for {func_name}
+    skeleton = f"""-- Sequential model for {func_name}
 def seq{camel_cap} (A B : List {type_hint}) (N : Nat) : List {type_hint} :=
   {{seq_model_body}}
 

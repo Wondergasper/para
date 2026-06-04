@@ -91,6 +91,74 @@ def classify_region(source_code: str) -> dict:
     if not visitor.loops:
         return base_ir("sequential", "No for-loops were found.", [], func_name)
 
+    # Static Execution Cost Model: check complexity of the outermost loop nest
+    outer_loop_node = visitor.loops[0]["node"]
+    
+    # 1. Count statement and expression nodes in loop body
+    class ASTNodeCounter(c_ast.NodeVisitor):
+        def __init__(self):
+            self.count = 0
+        def generic_visit(self, node):
+            self.count += 1
+            super().generic_visit(node)
+            
+    counter = ASTNodeCounter()
+    if hasattr(outer_loop_node, 'stmt'):
+        counter.visit(outer_loop_node.stmt)
+    body_complexity = max(1, counter.count)
+    
+    # 2. Extract nested loop trip counts
+    def _get_loop_trip_count(node) -> int:
+        start_val = 0
+        try:
+            init = node.init
+            if isinstance(init, c_ast.DeclList) and init.decls:
+                decl = init.decls[0]
+                if decl.init and isinstance(decl.init, c_ast.Constant):
+                    start_val = int(decl.init.value)
+            elif isinstance(init, c_ast.Assignment):
+                if isinstance(init.rvalue, c_ast.Constant):
+                    start_val = int(init.rvalue.value)
+        except Exception:
+            pass
+
+        limit_val = None
+        try:
+            cond = node.cond
+            if isinstance(cond, c_ast.BinaryOp):
+                if isinstance(cond.right, c_ast.Constant):
+                    limit_val = int(cond.right.value)
+        except Exception:
+            pass
+
+        if limit_val is None:
+            return 1024
+        return max(0, limit_val - start_val)
+
+    class NestTripCountCollector(c_ast.NodeVisitor):
+        def __init__(self):
+            self.trip_counts = []
+        def visit_For(self, node):
+            self.trip_counts.append(_get_loop_trip_count(node))
+            self.generic_visit(node)
+
+    collector = NestTripCountCollector()
+    collector.visit(outer_loop_node)
+    total_trip_count = 1
+    for tc in collector.trip_counts:
+        total_trip_count *= tc
+
+    complexity = total_trip_count * body_complexity
+    
+    # Bypass parallelization for trivial loop nests
+    if complexity < 256:
+        return base_ir(
+            "sequential",
+            f"Trivial loop complexity (Estimated: {complexity} nodes), skipping parallelization to avoid overhead.",
+            [],
+            func_name,
+        )
+
     loop_vars = [l["var"] for l in visitor.loops]
     
     if visitor.has_indirect_indexing:
@@ -113,6 +181,7 @@ def classify_region(source_code: str) -> dict:
 class PolyhedralVisitor(c_ast.NodeVisitor):
     def __init__(self):
         self.loops = []
+        self.loop_bounds = {}  # {var_name: (start, limit)}
         self.has_indirect_indexing = False
         self.has_loop_carried_dependency = False
         self.raw_deps = []
@@ -127,10 +196,35 @@ class PolyhedralVisitor(c_ast.NodeVisitor):
     def visit_For(self, node):
         loop_var = self._get_loop_var(node.init)
         if loop_var:
+            start_val = 0
+            try:
+                init = node.init
+                if isinstance(init, c_ast.DeclList) and init.decls:
+                    decl = init.decls[0]
+                    if decl.init and isinstance(decl.init, c_ast.Constant):
+                        start_val = int(decl.init.value)
+                elif isinstance(init, c_ast.Assignment):
+                    if isinstance(init.rvalue, c_ast.Constant):
+                        start_val = int(init.rvalue.value)
+            except Exception:
+                pass
+
+            limit_val = 1024
+            try:
+                cond = node.cond
+                if isinstance(cond, c_ast.BinaryOp):
+                    if isinstance(cond.right, c_ast.Constant):
+                        limit_val = int(cond.right.value)
+            except Exception:
+                pass
+
+            self.loop_bounds[loop_var] = (start_val, limit_val)
             self.loops.append({"var": loop_var, "node": node})
             self.current_loop_vars.append(loop_var)
             self.generic_visit(node)
             self.current_loop_vars.pop()
+            if loop_var in self.loop_bounds:
+                del self.loop_bounds[loop_var]
         else:
             self.generic_visit(node)
 
@@ -142,6 +236,54 @@ class PolyhedralVisitor(c_ast.NodeVisitor):
             if len(init.decls) == 1 and isinstance(init.decls[0], c_ast.Decl):
                 return init.decls[0].name
         return None
+
+    def _has_dependency(self, expr1, expr2) -> bool:
+        v1 = list(expr1.coefficients.keys())
+        v2 = list(expr2.coefficients.keys())
+
+        if not v1 or not v2:
+            return False
+
+        if len(v1) == 1 and len(v2) == 1 and v1[0] == v2[0]:
+            v = v1[0]
+            a = expr1.coefficients[v]
+            b = expr2.coefficients[v]
+            k1 = expr1.constant
+            k2 = expr2.constant
+
+            L, U = self.loop_bounds.get(v, (0, 1024))
+            C = k2 - k1
+
+            if a == b:
+                if C % a != 0:
+                    return False
+                d = C // a
+                if d == 0:
+                    return False
+                return abs(d) < (U - L)
+            else:
+                import math
+                g = math.gcd(abs(a), abs(b))
+                if g == 0:
+                    return C == 0
+                if C % g != 0:
+                    return False
+
+                a_pos = max(a, 0)
+                a_neg = max(-a, 0)
+                b_pos = max(b, 0)
+                b_neg = max(-b, 0)
+
+                U_val = U - 1
+                min_val = a_pos * L - a_neg * U_val - (b_pos * U_val - b_neg * L)
+                max_val = a_pos * U_val - a_neg * L - (b_pos * L - b_neg * U_val)
+
+                if C < min_val or C > max_val:
+                    return False
+
+                return True
+
+        return True
 
     def visit_Assignment(self, node):
         # Reduction detection: sum += ... or sum = sum + ...
@@ -176,13 +318,13 @@ class PolyhedralVisitor(c_ast.NodeVisitor):
             if self._in_assignment_lvalue:
                 # Check for WAW (Write-After-Write)
                 for prev in self.writes.get(array_name, []):
-                    if expr.coefficients == prev.coefficients and expr.constant != prev.constant:
+                    if self._has_dependency(expr, prev):
                         self.has_loop_carried_dependency = True
                         self.waw_deps.append([f"{array_name}[{prev}]", f"{array_name}[{expr}]"])
                 
                 # Check for WAR (Write-After-Read)
                 for prev in self.reads.get(array_name, []):
-                    if expr.coefficients == prev.coefficients and expr.constant != prev.constant:
+                    if self._has_dependency(expr, prev):
                         self.has_loop_carried_dependency = True
                         self.war_deps.append([f"{array_name}[{prev}]", f"{array_name}[{expr}]"])
                 
@@ -191,7 +333,7 @@ class PolyhedralVisitor(c_ast.NodeVisitor):
             else:
                 # Check for RAW (Read-After-Write)
                 for prev in self.writes.get(array_name, []):
-                    if expr.coefficients == prev.coefficients and expr.constant != prev.constant:
+                    if self._has_dependency(expr, prev):
                         self.has_loop_carried_dependency = True
                         self.raw_deps.append([f"{array_name}[{prev}]", f"{array_name}[{expr}]"])
                 

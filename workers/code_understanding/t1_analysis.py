@@ -91,6 +91,7 @@ def analyse(
     source_code: str,
     provider: str = "ollama",
     model: str = None,
+    source_file: str = "",
 ) -> dict:
     """
     Run T1 analysis on a C function.
@@ -99,6 +100,7 @@ def analyse(
         source_code: The C function to analyse.
         provider:    LLM provider ("ollama" | "groq" | "gemini").
         model:       Model override (uses provider default if None).
+        source_file: Optional source C file path for compilation database checks.
 
     Returns:
         Parsed AnnotatedIR dict.
@@ -110,7 +112,7 @@ def analyse(
     from workers.code_understanding.clang_analyzer import is_clang_available, analyse_with_clang
     if is_clang_available():
         try:
-            return analyse_with_clang(source_code)
+            return analyse_with_clang(source_code, source_file=source_file)
         except Exception:
             pass
 

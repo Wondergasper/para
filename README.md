@@ -1,147 +1,104 @@
-# APG Phase 1 Backend
+# APG Phase 2 — Autonomous Parallel Code Generation
+> A multi-layered pipeline for transforming sequential C/C++ source code into formally verified OpenMP parallel implementations with zero human intervention.
 
-This folder supports **Phase 1: Foundation Pipeline** from
-`APG_System_Architecture.docx`.
+[![Phase 1: Complete](https://img.shields.io/badge/Phase%201-Complete-success?style=flat-square)](#)
+[![Phase 2: Complete](https://img.shields.io/badge/Phase%202-Complete-success?style=flat-square)](#)
+[![Phase 3: In Progress](https://img.shields.io/badge/Phase%203-In%20Progress-blue?style=flat-square)](#)
+[![Phase 4: In Progress](https://img.shields.io/badge/Phase%204-In%20Progress-blue?style=flat-square)](#)
 
-Phase 1 target:
+---
 
-```text
-C source in -> analyse -> generate OpenMP candidate -> verify -> retry -> return result
-```
+## 🛠️ System Overview
 
-There is no frontend in this build. The entry point is the Go orchestrator:
+The system is split into two specialized sub-systems:
+* **Go Orchestrator:** Manages the API endpoints, SQLite-based job store, and job routing over NATS JetStream.
+* **Python Workers:** Houses the AST-based loop classifier, CTT transform engine, LLM code generation via Ollama, verification gates (GCC, TSAN, CBMC), and reinforcement learning feedback logic.
 
-```powershell
-go run ./cmd/orchestrator
-```
+For a deep-dive architectural analysis, see [analysis_results.md](file:///C:/Users/USER/.gemini/antigravity/brain/c00a59fb-98f8-4ec1-ad32-5628e517d134/analysis_results.md).
 
-The server exposes the Phase 1 API from the architecture document:
+---
 
-- `POST /submit` accepts C source code as the raw request body or multipart `file`
-- `GET /result/{id}` returns job status, score, result code, and errors
+## 🚀 Setup & Installation
 
-## Setup
+### 1. Prerequisites
+Ensure you have the following installed on your host system:
+* **Go 1.22+**
+* **Python 3.11+**
+* **GCC / Clang** (with OpenMP & ThreadSanitizer support)
+* **NATS Server** (for queue-based worker execution)
+* **Ollama** (for local LLM inference)
 
-Install Phase 1 Python dependencies:
-
+### 2. Environment Setup
+Install the Python dependencies:
 ```powershell
 pip install -r requirements/phase1.txt
 ```
 
-Install and run Ollama, then pull a local coding model:
-
+Download and start the local LLM model:
 ```powershell
 ollama pull deepseek-coder:6.7b
 ```
 
-## Submit A Job
+Ensure NATS Server is running (usually via Docker or service manager):
+```powershell
+docker run -d --name nats -p 4222:4222 -p 8222:8222 nats:latest -js
+```
 
-Start the orchestrator:
+---
 
+## 🏃 Execution Guide
+
+### 1. Start the Python Worker
+The worker listens to NATS and processes code parallelization jobs:
+```powershell
+python -m workers.nats_worker
+```
+
+### 2. Start the Go Orchestrator
+In a separate terminal, start the HTTP API:
 ```powershell
 go run ./cmd/orchestrator
 ```
 
-Submit a sample C file:
-
+### 3. Submit a Job
+Submit a sequential C file to the pipeline:
 ```powershell
 curl.exe -X POST http://localhost:8080/submit --data-binary "@examples/vector_scale.c"
 ```
+Response will return a JSON body containing a unique `"id"`.
 
-Then fetch the job by the returned `id`:
-
+### 4. Fetch Results
+Retrieve the job status, score, parallelized C code, and verification details:
 ```powershell
 curl.exe http://localhost:8080/result/<job_id>
 ```
 
-## Current Phase 1 Status
+> [!TIP]
+> You can also run the pipeline directly on a file without NATS:
+> `python scripts/run_pipeline.py --source examples/vector_scale.c`
 
-Implemented:
+---
 
-- Go HTTP orchestrator
-- `POST /submit`
-- `GET /result/{id}`
-- persistent job tracking in `data/jobs.json`
-- Python pipeline CLI bridge via `scripts/run_pipeline.py`
-- architecture-aligned Python worker packages under `workers/`
-- generated C output-comparison harness calls for simple Phase 1 array functions
+## 📊 Phase-by-Phase Development Status
 
-Still remaining from `APG_System_Architecture.docx` Phase 1:
+### Phase 1: Foundation Pipeline (Complete)
+* **Go HTTP Orchestrator:** standard endpoints `/submit` and `/result/{id}` are live.
+* **Metadata Persistence:** Stores job metadata and configurations.
+* **Verification Harness:** Generates dynamic comparison test files and evaluates them via GCC compilation and differential float analysis.
 
-- install GCC/OpenMP locally so Gate 1 and Gate 2 can run end-to-end
-- improve Layer 1 with tree-sitter instead of LLM-only analysis
-- complete race checking on Linux/macOS with ThreadSanitizer
+### Phase 2: Polyhedral Analysis & Candidate Pools (Complete)
+* **AST Classifier:** Custom AST visitor using `pycparser` classifying loops into `polyhedral`, `irregular`, and `sequential`.
+* **CTT Transforms:** Deterministic transformations for Outer-loop Parallelization, Loop Interchange, and Loop Collapse (`collapse(2)`).
+* **Parallel Verification:** Verification gates compile and run candidate checks in parallel using Python thread pools.
+* **Queued Execution:** Decoupled task queue using NATS JetStream and serialized with gRPC/Protobuf contracts.
 
-## Current Phase 2 Status
+### Phase 3: Formal Verification Bridge (In Progress)
+* **CBMC Model Checking:** Generates bounded equivalence assertions checking candidate code correctness.
+* **Proof Corpus Store:** Stores verified execution/harness details in `data/proofs.jsonl`.
+* **Lean 4 Spec Gen:** Synthesizes Lean 4 equivalence theorems.
+* *Remaining:* Realizing native execution runtime for Lean 4/Verus proof checks.
 
-Started from **Phase 2: Polyhedral Analysis + Multi-Candidate Generation** in
-`APG_System_Architecture.docx`.
-
-Implemented:
-
-- AST-based polyhedral classifier using `pycparser` (replaces initial regex heuristic)
-- robust affine expression detection for loop bounds and array indices
-- indirect-index detection for irregular regions
-- deterministic CTT candidate pool generation:
-  - standard outer-loop parallelization
-  - loop collapse (`collapse(2)`) for multi-dimensional nests
-  - AST-based loop interchange
-- pipeline fallback to the local classifier when LLM analysis is unavailable
-- distributed task queuing with NATS JetStream
-- gRPC/Protobuf contracts for cross-language job communication
-- asynchronous results listener in the orchestrator
-
-Still remaining from Phase 2:
-
-- replace the manual AST classifier with `islpy` / ISL polyhedral checks (pending Windows build fix)
-- add more CTT transforms such as tiling, interchange, and distribution
-- run verification over candidates in parallel
-- add structured JSON logging and correlation IDs
-
-## Current Phase 3 Status
-
-Started from **Phase 3: Formal Verification Bridge** in
-`APG_System_Architecture.docx`.
-
-Implemented:
-
-- CBMC bounded-equivalence harness generation for simple array functions
-- optional `gate_cbmc_model_check` verifier gate
-- `PipelineConfig(enable_cbmc=True, cbmc_path="cbmc")`
-- `scripts/run_pipeline.py --enable-cbmc --cbmc-path cbmc`
-- clean missing-tool errors for GCC and CBMC
-- local JSONL proof corpus store at `data/proofs.jsonl`
-- `scripts/run_pipeline.py --proof-corpus data/proofs.jsonl`
-
-Still remaining from Phase 3:
-
-- install CBMC and validate the generated harnesses end-to-end
-- add CBMC race-freedom checks, not only output-equivalence assertions
-- add a Lean 4 subprocess manager with richer proof error parsing
-- add a Verus subprocess path for Rust-transpiled candidates
-- replace the local JSONL proof corpus with PostgreSQL
-
-## Current Phase 4 Status
-
-Started from **Phase 4: Training Signal & Fine-Tuning** in
-`APG_System_Architecture.docx`.
-
-Implemented:
-
-- export local Phase 3 `data/proofs.jsonl` records to SFT JSONL
-- `python -m workers.training.export_corpus --local-proof-corpus data/proofs.jsonl --output corpus.jsonl`
-- verifier reward helpers matching the document weights:
-  - compile: `+0.2`
-  - output match: `+0.4`
-  - race freedom: `+0.2`
-  - formal proof: `+0.2`
-- local JSONL reward event store at `data/rewards.jsonl`
-- `scripts/run_pipeline.py --reward-events data/rewards.jsonl`
-- model registry version selection with runtime routing based on version tag
-- orchestrator A/B testing flag to route a percentage of traffic to fine-tuned adapters
-
-Still remaining from Phase 4:
-
-- collect at least 500 verified proof records
-- run LoRA fine-tuning against the exported corpus
-- run A/B evaluation with a real fine-tuned adapter
+### Phase 4: SFT Signal & A/B Routing (In Progress)
+* **Reward Engine:** Calculates reward feedback score (weights: compile `+0.2`, output match `+0.4`, race `+0.2`, proof `+0.2`).
+* **Adapter Routing:** A/B testing framework routes configurable traffic percentages to fine-tuned adapters.
+* *Remaining:* Accumulating 500 verified proof triples and executing LoRA fine-tuning scripts.

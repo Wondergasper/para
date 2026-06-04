@@ -63,6 +63,78 @@ Output:
     }"""
 
 
+SYSTEM_PROMPT_CUDA = """You are an expert HPC programmer specialised in CUDA parallelisation of C/C++ code.
+Given a C function and its dependency graph, produce a correct CUDA-parallelised version.
+
+OUTPUT RULES (follow exactly):
+1. Output ONLY valid C/C++ CUDA code. No explanations. No markdown fences. No comments outside the code.
+2. The output must contain:
+   - A `__global__` CUDA kernel function that performs the actual computation.
+   - A host wrapper function that matches the original function signature exactly.
+3. The host wrapper must handle:
+   - Allocating device memory via `cudaMalloc`.
+   - Copying inputs to device via `cudaMemcpy`.
+   - Launching the CUDA kernel with appropriate grid and block dimensions.
+   - Checking for launch errors or synchronizing via `cudaDeviceSynchronize()`.
+   - Copying results back to host via `cudaMemcpy`.
+   - Freeing device memory via `cudaFree`.
+
+EXAMPLE INPUT / OUTPUT:
+Input function:
+    void vscale(float* A, float scalar, int N) {
+        for (int i = 0; i < N; i++) A[i] *= scalar;
+    }
+Input dep graph: {"RAW":[],"WAR":[],"WAW":[]}
+
+Output:
+    __global__ void vscale_kernel(float* A, float scalar, int N) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < N) {
+            A[i] *= scalar;
+        }
+    }
+
+    void vscale(float* A, float scalar, int N) {
+        float* d_A;
+        cudaMalloc(&d_A, N * sizeof(float));
+        cudaMemcpy(d_A, A, N * sizeof(float), cudaMemcpyHostToDevice);
+        int threadsPerBlock = 256;
+        int blocksPerGrid = (N + threadsPerBlock - 1) / threadsPerBlock;
+        vscale_kernel<<<blocksPerGrid, threadsPerBlock>>>(d_A, scalar, N);
+        cudaDeviceSynchronize();
+        cudaMemcpy(A, d_A, N * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaFree(d_A);
+    }"""
+
+
+SYSTEM_PROMPT_OPENMP_TARGET = """You are an expert HPC programmer specialised in OpenMP target offloading for C code.
+Given a C function and its dependency graph, produce a correct OpenMP-target parallelised version.
+
+OUTPUT RULES (follow exactly):
+1. Output ONLY valid C code. No explanations. No markdown fences. No comments outside the code.
+2. The output must be a complete, compilable C function.
+3. Use standard OpenMP target offload pragmas (e.g. `#pragma omp target teams distribute parallel for map(...)`).
+4. Make sure to specify the `map` clause with correct map types:
+   - `map(to: ...)` for read-only variables/arrays.
+   - `map(from: ...)` for write-only variables/arrays.
+   - `map(tofrom: ...)` for read-write variables/arrays.
+
+EXAMPLE INPUT / OUTPUT:
+Input function:
+    void vscale(float* A, float scalar, int N) {
+        for (int i = 0; i < N; i++) A[i] *= scalar;
+    }
+Input dep graph: {"RAW":[],"WAR":[],"WAW":[]}
+
+Output:
+    void vscale(float* A, float scalar, int N) {
+        #pragma omp target teams distribute parallel for map(tofrom: A[0:N])
+        for (int i = 0; i < N; i++) {
+            A[i] *= scalar;
+        }
+    }"""
+
+
 # ── Prompt builder ─────────────────────────────────────────────────────────────
 
 def build_t2_prompt(
@@ -120,9 +192,10 @@ def generate_parallel(
     provider:     str  = "ollama",
     model:        str  = None,
     max_retries:  int  = 3,
+    target:       str  = "openmp",
 ) -> list[str]:
     """
-    Generate OpenMP-parallelised C code using batch LLM inference.
+    Generate OpenMP or GPU parallelised C/CUDA code using batch LLM inference.
     """
     prompt = build_t2_prompt(
         source_code, dep_graph,
@@ -130,10 +203,17 @@ def generate_parallel(
         annotated_ir=annotated_ir,
     )
 
+    if target == "cuda":
+        system_prompt = SYSTEM_PROMPT_CUDA
+    elif target == "openmp-target":
+        system_prompt = SYSTEM_PROMPT_OPENMP_TARGET
+    else:
+        system_prompt = SYSTEM_PROMPT_T2
+
     # Call generate_batch once to query multiple candidates simultaneously
     raw_responses = generate_batch(
         prompt=prompt,
-        system=SYSTEM_PROMPT_T2,
+        system=system_prompt,
         provider=provider,
         model=model,
         temp=0.2,
@@ -148,8 +228,8 @@ def generate_parallel(
             end_idx = len(lines) - 1 if lines[-1].strip() == "```" else len(lines)
             cleaned = "\n".join(lines[1:end_idx])
 
-        # Basic sanity check: does the output look like C code?
-        if any(keyword in cleaned for keyword in ("for", "while", "pragma", "{")):
+        # Basic sanity check: does the output look like C or CUDA code?
+        if any(keyword in cleaned for keyword in ("for", "while", "pragma", "kernel", "cuda", "{")):
             candidates.append(cleaned)
 
     if not candidates and raw_responses:
@@ -168,15 +248,17 @@ def generate_candidate_pool(
     model: str = None,
     max_llm_candidates: int = 3,
     llm_generator=generate_parallel,
+    target: str = "openmp",
 ) -> list[str]:
     """
     Phase 2 candidate pool: deterministic CTT candidates first, LLM candidates next.
     """
     candidates = []
-    ctt_candidates = generate_ctt_candidates(source_code, annotated_ir or {})
-    for cand in ctt_candidates:
-        if cand not in candidates:
-            candidates.append(cand)
+    if target == "openmp":
+        ctt_candidates = generate_ctt_candidates(source_code, annotated_ir or {})
+        for cand in ctt_candidates:
+            if cand not in candidates:
+                candidates.append(cand)
 
     llm_candidates = []
     if max_llm_candidates > 0:
@@ -188,6 +270,7 @@ def generate_candidate_pool(
             provider=provider,
             model=model,
             max_retries=max_llm_candidates,
+            target=target,
         )
     for candidate in llm_candidates:
         if candidate not in candidates:

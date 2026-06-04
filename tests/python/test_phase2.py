@@ -50,6 +50,36 @@ class Phase2PolyhedralTests(unittest.TestCase):
         self.assertEqual(result["type"], "irregular")
         self.assertIn("indirect", result["summary"].lower())
 
+    def test_classifies_independent_array_index_as_no_dependency(self):
+        source = """void scale(float* A, int N) {
+    for (int i = 0; i < N; i++) {
+        A[i * 2] = A[i * 2 + 1] * 2.0f;
+    }
+}"""
+        result = classify_region(source)
+        self.assertEqual(result["type"], "polyhedral")
+        self.assertFalse(result["dependencies"]["RAW"])
+
+    def test_classifies_dependency_exceeding_bounds_as_no_dependency(self):
+        source = """void scale(float* A) {
+    for (int i = 0; i < 300; i++) {
+        A[i] = A[i + 500] * 2.0f;
+    }
+}"""
+        result = classify_region(source)
+        self.assertEqual(result["type"], "polyhedral")
+        self.assertFalse(result["dependencies"]["RAW"])
+
+    def test_classifies_real_dependency_as_loop_carried_dependency(self):
+        source = """void scale(float* A, int N) {
+    for (int i = 1; i < 100; i++) {
+        A[i] = A[i - 1] * 2.0f;
+    }
+}"""
+        result = classify_region(source)
+        self.assertEqual(result["type"], "polyhedral")
+        self.assertTrue(result["dependencies"]["RAW"])
+
 
 class Phase2CandidatePoolTests(unittest.TestCase):
     def test_ctt_candidate_adds_openmp_pragma_to_polyhedral_loop(self):
@@ -198,6 +228,69 @@ class Phase2CandidatePoolTests(unittest.TestCase):
         from workers.code_understanding.clang_analyzer import is_clang_available
         res = is_clang_available()
         self.assertIn(res, (True, False))
+
+    def test_clang_analyzer_with_compile_commands(self):
+        import tempfile
+        import os
+        import json
+        from workers.code_understanding.clang_analyzer import analyse_with_clang, is_clang_available
+
+        if not is_clang_available():
+            self.skipTest("Clang not installed")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            inc_dir = os.path.join(tmpdir, "include")
+            os.makedirs(inc_dir)
+            
+            header_path = os.path.join(inc_dir, "custom_types.h")
+            with open(header_path, "w", encoding="utf-8") as f:
+                f.write("typedef float custom_float_t;\n")
+                
+            source_path = os.path.join(tmpdir, "source.c")
+            source_code = """#include "custom_types.h"
+void scale_custom(custom_float_t* A, int N) {
+    for (int i = 0; i < N; i++) {
+        A[i] *= 2.0f;
+    }
+}"""
+            with open(source_path, "w", encoding="utf-8") as f:
+                f.write(source_code)
+                
+            cc_db = [
+                {
+                    "directory": tmpdir,
+                    "command": f"gcc -Iinclude -c source.c",
+                    "file": "source.c"
+                }
+            ]
+            with open(os.path.join(tmpdir, "compile_commands.json"), "w", encoding="utf-8") as f:
+                json.dump(cc_db, f)
+                
+            result = analyse_with_clang(source_code, source_file=source_path)
+            
+            self.assertEqual(result["func_name"], "scale_custom")
+            self.assertEqual(result["type"], "polyhedral")
+            self.assertEqual(result["affine_dimensions"], ["i"])
+
+    def test_static_cost_model_skips_trivial_loop(self):
+        source = """void trivial_loop(float* A) {
+    for (int i = 0; i < 4; i++) {
+        A[i] = 0.0f;
+    }
+}"""
+        result = classify_region(source)
+        self.assertEqual(result["type"], "sequential")
+        self.assertIn("Trivial loop complexity", result["summary"])
+
+    def test_static_cost_model_allows_large_loop(self):
+        source = """void heavy_loop(float* A) {
+    for (int i = 0; i < 500; i++) {
+        A[i] = A[i] * 2.0f + 1.0f;
+    }
+}"""
+        result = classify_region(source)
+        self.assertEqual(result["type"], "polyhedral")
+        self.assertEqual(result["affine_dimensions"], ["i"])
 
 
 if __name__ == "__main__":

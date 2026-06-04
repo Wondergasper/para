@@ -39,7 +39,7 @@ def is_clang_available() -> bool:
     return find_clang() is not None
 
 
-def analyse_with_clang(source_code: str) -> dict:
+def analyse_with_clang(source_code: str, source_file: str = "") -> dict:
     """
     Analyse a C function using the Clang AST dump.
     
@@ -55,12 +55,18 @@ def analyse_with_clang(source_code: str) -> dict:
         with open(src_path, "w", encoding="utf-8") as f:
             f.write(source_code)
 
+        flags, db_dir = _get_compilation_flags_and_dir(source_file)
+        cmd = [clang_path, "-Xclang", "-ast-dump", "-fsyntax-only"]
+        cmd.extend(flags)
+        cmd.append(src_path)
+
         # Run clang -Xclang -ast-dump to get the full C compiler AST
         res = subprocess.run(
-            [clang_path, "-Xclang", "-ast-dump", "-fsyntax-only", src_path],
+            cmd,
             capture_output=True,
             text=True,
             timeout=10,
+            cwd=db_dir,
         )
         if res.returncode != 0 and not res.stdout:
             raise RuntimeError(f"Clang AST dump failed:\n{res.stderr}")
@@ -68,6 +74,110 @@ def analyse_with_clang(source_code: str) -> dict:
         ast_output = res.stdout
         
     return _parse_clang_ast(ast_output, source_code)
+
+
+def _get_compilation_flags_and_dir(source_file: str) -> tuple[list[str], str | None]:
+    """
+    Search for compile_commands.json starting from source_file's directory
+    and moving upwards, parse it, and extract the compilation flags
+    and directory associated with the source file.
+    """
+    if not source_file:
+        return [], None
+
+    import json
+    import shlex
+
+    abs_source = os.path.abspath(source_file)
+    dirname = os.path.dirname(abs_source)
+
+    # Search upwards for compile_commands.json
+    db_path = None
+    curr = dirname
+    while True:
+        candidate = os.path.join(curr, "compile_commands.json")
+        if os.path.isfile(candidate):
+            db_path = candidate
+            break
+        parent = os.path.dirname(curr)
+        if parent == curr:  # Root reached
+            break
+        curr = parent
+
+    if not db_path:
+        log.info("compile_commands.json not found in search path")
+        return [], None
+
+    log.info(f"Found compilation database at: {db_path}")
+    try:
+        with open(db_path, "r", encoding="utf-8") as f:
+            db = json.load(f)
+    except Exception as e:
+        log.error(f"Failed to parse compilation database: {e}")
+        return [], None
+
+    # Find matching entry
+    entry = None
+    for item in db:
+        if "file" in item:
+            item_dir = item.get("directory", "")
+            item_file = item["file"]
+            if not os.path.isabs(item_file) and item_dir:
+                abs_item_file = os.path.abspath(os.path.join(item_dir, item_file))
+            else:
+                abs_item_file = os.path.abspath(item_file)
+
+            if abs_item_file == abs_source:
+                entry = item
+                break
+
+    if not entry:
+        log.info(f"No compilation database entry found for {source_file}")
+        return [], None
+
+    db_dir = entry.get("directory", None)
+
+    # Extract flags
+    args = []
+    if "arguments" in entry:
+        args = list(entry["arguments"])
+    elif "command" in entry:
+        args = shlex.split(entry["command"])
+
+    if not args:
+        return [], db_dir
+
+    flags = []
+    i = 1  # Skip compiler executable
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-c", "-o"):
+            i += 2
+            continue
+        if arg.startswith("-o"):
+            i += 1
+            continue
+
+        # Match include paths, macros, and standard options
+        if arg.startswith("-I") or arg.startswith("-D") or arg.startswith("-U"):
+            if arg in ("-I", "-D", "-U") and i + 1 < len(args):
+                flags.append(arg)
+                flags.append(args[i + 1])
+                i += 2
+                continue
+            flags.append(arg)
+        elif arg == "-isystem" and i + 1 < len(args):
+            flags.append(arg)
+            flags.append(args[i + 1])
+            i += 2
+            continue
+        elif arg.startswith("-std="):
+            flags.append(arg)
+
+        i += 1
+
+    log.info(f"Extracted flags from compilation database: {flags}")
+    return flags, db_dir
 
 
 def _parse_clang_ast(ast_text: str, source_code: str) -> dict:

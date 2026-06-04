@@ -1,12 +1,17 @@
 """
-Command-line bridge for the Go Phase 1 orchestrator.
+Command-line bridge for the Go orchestrator.
 
-Reads a C source file, runs the APG Python pipeline, and prints a single JSON
-object to stdout. Logs must stay off stdout because the Go runner parses stdout.
+Two modes:
+  1. --source FILE   (original) -- reads a C source file
+  2. --json          (local-queue mode) -- reads a JSON object from stdin:
+       { "id": "...", "source": "...", "func_name": "...", "model_version": "..." }
+     Prints a single JSON object to stdout.
+     All logs go to stderr so Go can parse stdout cleanly.
 """
 
 import argparse
 import json
+import logging
 import os
 import sys
 from dataclasses import asdict
@@ -15,22 +20,80 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from workers.pipeline import PipelineConfig, run
 
+# Redirect all logging to stderr so stdout stays clean JSON
+logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                    format="%(asctime)s [%(levelname)s] %(message)s")
+
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the APG Phase 1 pipeline.")
-    parser.add_argument("--source", required=True, help="Path to a C source file.")
-    parser.add_argument("--func-name", default="func", help="Function name under test.")
-    parser.add_argument("--provider", default="ollama", choices=["ollama", "groq", "gemini"])
-    parser.add_argument("--model", default=None)
-    parser.add_argument("--max-candidates", type=int, default=1)
-    parser.add_argument("--max-rounds", type=int, default=3)
-    parser.add_argument("--enable-tsan", action="store_true")
-    parser.add_argument("--enable-cbmc", action="store_true")
-    parser.add_argument("--cbmc-path", default="cbmc")
-    parser.add_argument("--enable-proof", action="store_true")
-    parser.add_argument("--proof-corpus", default="", help="Optional JSONL path for proof records.")
-    parser.add_argument("--reward-events", default="", help="Optional JSONL path for reward events.")
+    parser = argparse.ArgumentParser(description="Run the APG pipeline.")
+    parser.add_argument("--source",         default=None,
+                        help="Path to a C source file (file mode).")
+    parser.add_argument("--json",           action="store_true",
+                        help="Read JSON job from stdin, write JSON result to stdout (local-queue mode).")
+    parser.add_argument("--func-name",      default="func")
+    parser.add_argument("--provider",       default=os.getenv("APG_PROVIDER", "ollama"),
+                        choices=["ollama", "groq", "gemini"])
+    parser.add_argument("--model",          default=os.getenv("APG_MODEL", None))
+    parser.add_argument("--max-candidates", type=int, default=int(os.getenv("APG_MAX_CANDIDATES", "3")))
+    parser.add_argument("--max-rounds",     type=int, default=int(os.getenv("APG_MAX_ROUNDS", "3")))
+    parser.add_argument("--enable-tsan",    action="store_true")
+    parser.add_argument("--enable-cbmc",    action="store_true")
+    parser.add_argument("--cbmc-path",      default="cbmc")
+    parser.add_argument("--enable-proof",   action="store_true")
+    parser.add_argument("--proof-corpus",   default="data/proofs.jsonl")
+    parser.add_argument("--reward-events",  default="data/rewards.jsonl")
     args = parser.parse_args()
+
+    # ------------------------------------------------------------------
+    # Mode 1: --json  (local-queue / Go subprocess mode)
+    # ------------------------------------------------------------------
+    if args.json:
+        try:
+            payload = json.load(sys.stdin)
+        except Exception as exc:
+            print(json.dumps({"success": False, "score": 0.0,
+                              "error": f"stdin parse error: {exc}"}))
+            return 1
+
+        source_code   = payload.get("source", "")
+        func_name     = payload.get("func_name", "func") or "func"
+        model_version = payload.get("model_version", "base")
+
+        if not source_code.strip():
+            print(json.dumps({"success": False, "score": 0.0,
+                              "error": "empty source code"}))
+            return 1
+
+        cfg = PipelineConfig(
+            provider           = args.provider,
+            model              = args.model,
+            model_version      = model_version,
+            max_t2_candidates  = args.max_candidates,
+            max_critique_rounds= args.max_rounds,
+            enable_proof       = args.enable_proof,
+            enable_cbmc        = args.enable_cbmc,
+            cbmc_path          = args.cbmc_path,
+            enable_tsan        = (os.name != "nt"),   # auto-disabled on Windows
+            proof_corpus_path  = args.proof_corpus,
+            reward_events_path = args.reward_events,
+            verbose            = True,                # logs go to stderr
+            job_id             = payload.get("id", ""),
+        )
+
+        try:
+            result = run(source_code=source_code, func_name=func_name, config=cfg)
+            print(json.dumps(asdict(result)))
+            return 0 if result.success else 1
+        except Exception as exc:
+            print(json.dumps({"success": False, "score": 0.0, "error": str(exc)}))
+            return 1
+
+    # ------------------------------------------------------------------
+    # Mode 2: --source FILE  (original CLI mode)
+    # ------------------------------------------------------------------
+    if not args.source:
+        parser.error("Either --source or --json is required.")
 
     try:
         with open(args.source, "r", encoding="utf-8") as f:
@@ -40,17 +103,18 @@ def main() -> int:
         return 1
 
     cfg = PipelineConfig(
-        provider=args.provider,
-        model=args.model,
-        max_t2_candidates=args.max_candidates,
-        max_critique_rounds=args.max_rounds,
-        enable_proof=args.enable_proof,
-        enable_cbmc=args.enable_cbmc,
-        cbmc_path=args.cbmc_path,
-        enable_tsan=args.enable_tsan and os.name != "nt",
-        proof_corpus_path=args.proof_corpus,
-        reward_events_path=args.reward_events,
-        verbose=False,
+        provider           = args.provider,
+        model              = args.model,
+        max_t2_candidates  = args.max_candidates,
+        max_critique_rounds= args.max_rounds,
+        enable_proof       = args.enable_proof,
+        enable_cbmc        = args.enable_cbmc,
+        cbmc_path          = args.cbmc_path,
+        enable_tsan        = args.enable_tsan and os.name != "nt",
+        proof_corpus_path  = args.proof_corpus,
+        reward_events_path = args.reward_events,
+        source_file        = args.source,
+        verbose            = False,
     )
 
     try:

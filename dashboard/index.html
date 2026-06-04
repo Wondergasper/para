@@ -1,0 +1,1369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>APG — Autonomous Parallel Code Generator</title>
+  <meta name="description" content="Submit sequential C/C++ code and receive formally verified OpenMP parallel implementations with zero human intervention." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    /* ─────────────────────────────────────────
+       DESIGN TOKENS
+    ───────────────────────────────────────── */
+    :root {
+      --bg:         #09090f;
+      --bg-1:       #0f0f1a;
+      --bg-2:       #141426;
+      --bg-3:       #1a1a32;
+      --border:     rgba(120,120,255,0.12);
+      --border-hi:  rgba(120,120,255,0.30);
+
+      --accent:     #7c6ef5;
+      --accent-2:   #5b4fe0;
+      --accent-glow:rgba(124,110,245,0.25);
+
+      --green:      #22d47b;
+      --green-bg:   rgba(34,212,123,0.10);
+      --red:        #f85050;
+      --red-bg:     rgba(248,80,80,0.10);
+      --yellow:     #f5c542;
+      --yellow-bg:  rgba(245,197,66,0.10);
+      --blue:       #5ab4f5;
+      --blue-bg:    rgba(90,180,245,0.10);
+
+      --text:       #e8e8f8;
+      --text-2:     #9090b8;
+      --text-3:     #5a5a80;
+
+      --radius:     12px;
+      --radius-lg:  18px;
+      --radius-sm:  6px;
+
+      --shadow:     0 4px 32px rgba(0,0,0,0.5);
+      --shadow-accent: 0 0 40px rgba(124,110,245,0.15);
+    }
+
+    /* ─────────────────────────────────────────
+       RESET & BASE
+    ───────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+    code, pre, .mono {
+      font-family: 'JetBrains Mono', monospace;
+    }
+
+    /* ─────────────────────────────────────────
+       ANIMATED BG GRID
+    ───────────────────────────────────────── */
+    body::before {
+      content: '';
+      position: fixed; inset: 0; z-index: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 48px 48px;
+      mask-image: radial-gradient(ellipse 80% 60% at 50% 0%, black 40%, transparent 100%);
+      pointer-events: none;
+    }
+
+    /* ─────────────────────────────────────────
+       LAYOUT
+    ───────────────────────────────────────── */
+    .wrap { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 24px; }
+
+    /* ─────────────────────────────────────────
+       HEADER
+    ───────────────────────────────────────── */
+    header {
+      position: sticky; top: 0; z-index: 100;
+      background: rgba(9,9,15,0.85);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+    }
+    .header-inner {
+      display: flex; align-items: center; gap: 16px;
+      padding: 14px 24px;
+      max-width: 1280px; margin: 0 auto;
+    }
+    .logo {
+      display: flex; align-items: center; gap: 10px;
+      text-decoration: none;
+    }
+    .logo-icon {
+      width: 34px; height: 34px;
+      background: linear-gradient(135deg, var(--accent), #a78bfa);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 17px;
+      box-shadow: 0 0 16px var(--accent-glow);
+    }
+    .logo-text { font-weight: 700; font-size: 15px; color: var(--text); }
+    .logo-sub  { font-size: 11px; color: var(--text-3); margin-left: 2px; }
+
+    .header-pills { display: flex; gap: 8px; margin-left: auto; }
+    .pill {
+      font-size: 11px; font-weight: 500; font-family: 'JetBrains Mono', monospace;
+      padding: 3px 10px; border-radius: 20px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      color: var(--text-2);
+    }
+    .pill.live { border-color: var(--green); color: var(--green); background: var(--green-bg); }
+
+    .server-status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); margin-left: 8px; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--red); transition: background 0.4s; }
+    .status-dot.online { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.5} }
+
+    /* ─────────────────────────────────────────
+       HERO
+    ───────────────────────────────────────── */
+    .hero {
+      text-align: center;
+      padding: 72px 24px 52px;
+    }
+    .hero-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      font-size: 11px; font-weight: 500; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--accent);
+      background: rgba(124,110,245,0.1); border: 1px solid rgba(124,110,245,0.25);
+      padding: 5px 14px; border-radius: 20px; margin-bottom: 24px;
+    }
+    h1 {
+      font-size: clamp(32px,5vw,56px); font-weight: 700; line-height: 1.15;
+      letter-spacing: -0.02em;
+      background: linear-gradient(135deg, #fff 0%, #a78bfa 60%, var(--accent) 100%);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+      margin-bottom: 18px;
+    }
+    .hero-sub {
+      font-size: 16px; color: var(--text-2); max-width: 560px; margin: 0 auto 36px;
+    }
+    .hero-gates {
+      display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+    }
+    .gate-chip {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; font-weight: 500;
+      padding: 5px 12px; border-radius: 20px;
+      border: 1px solid var(--border); color: var(--text-2);
+      background: var(--bg-1);
+    }
+    .gate-chip .dot { width: 6px; height: 6px; border-radius: 50%; }
+    .gate-chip:nth-child(1) .dot { background: var(--blue); }
+    .gate-chip:nth-child(2) .dot { background: var(--green); }
+    .gate-chip:nth-child(3) .dot { background: var(--yellow); }
+    .gate-chip:nth-child(4) .dot { background: var(--accent); }
+
+    /* ─────────────────────────────────────────
+       MAIN GRID
+    ───────────────────────────────────────── */
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+      padding-bottom: 40px;
+    }
+    @media (max-width: 900px) { .main-grid { grid-template-columns: 1fr; } }
+
+    /* ─────────────────────────────────────────
+       PANEL / CARD
+    ───────────────────────────────────────── */
+    .panel {
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .panel:hover { border-color: var(--border-hi); box-shadow: var(--shadow-accent); }
+    .panel-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .panel-title {
+      display: flex; align-items: center; gap: 8px;
+      font-size: 12px; font-weight: 600; color: var(--text-2);
+      text-transform: uppercase; letter-spacing: 0.07em;
+    }
+    .panel-title .icon { font-size: 14px; }
+    .panel-body { padding: 18px; }
+
+    /* ─────────────────────────────────────────
+       CODE EDITOR
+    ───────────────────────────────────────── */
+    .editor-wrap {
+      position: relative;
+    }
+    .code-editor {
+      width: 100%;
+      min-height: 260px;
+      resize: vertical;
+      background: var(--bg);
+      color: #c9d1d9;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 16px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.75;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      tab-size: 4;
+    }
+    .code-editor:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    /* Syntax hint colours overlaid via spans */
+    .kw   { color: #ff79c6; }
+    .typ  { color: #8be9fd; }
+    .num  { color: #bd93f9; }
+    .cmt  { color: #6272a4; font-style: italic; }
+    .str  { color: #f1fa8c; }
+
+    /* ─────────────────────────────────────────
+       EXAMPLE BUTTONS
+    ───────────────────────────────────────── */
+    .examples-row {
+      display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;
+    }
+    .example-btn {
+      font-size: 11px; font-weight: 500; font-family: 'JetBrains Mono', monospace;
+      padding: 4px 10px; border-radius: var(--radius-sm);
+      background: var(--bg-3); border: 1px solid var(--border);
+      color: var(--text-2); cursor: pointer;
+      transition: all 0.15s;
+    }
+    .example-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(124,110,245,0.08); }
+    .example-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(124,110,245,0.12); }
+
+    /* ─────────────────────────────────────────
+       CONFIG ROW
+    ───────────────────────────────────────── */
+    .config-row {
+      display: flex; flex-wrap: wrap; gap: 12px; margin-top: 14px;
+    }
+    .config-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+    .config-label { font-size: 11px; font-weight: 500; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; }
+    .config-input, .config-select {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 7px 10px;
+      color: var(--text); font-size: 12px; font-family: 'JetBrains Mono', monospace;
+      outline: none; transition: border-color 0.2s;
+    }
+    .config-input:focus, .config-select:focus { border-color: var(--accent); }
+    .config-select option { background: var(--bg-2); }
+
+    /* ─────────────────────────────────────────
+       SUBMIT BUTTON
+    ───────────────────────────────────────── */
+    .submit-btn {
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      width: 100%; padding: 12px;
+      margin-top: 16px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      border: none; border-radius: var(--radius);
+      color: #fff; font-size: 13px; font-weight: 600; font-family: 'Inter', sans-serif;
+      cursor: pointer; letter-spacing: 0.02em;
+      transition: all 0.2s;
+      box-shadow: 0 4px 20px var(--accent-glow);
+    }
+    .submit-btn:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 8px 30px var(--accent-glow);
+    }
+    .submit-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .submit-btn .spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: white; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ─────────────────────────────────────────
+       JOB STATUS PANEL
+    ───────────────────────────────────────── */
+    .job-status-box {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin-bottom: 14px;
+      display: none;
+    }
+    .job-status-box.visible { display: block; }
+
+    .job-id-row { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .job-id-label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; }
+    .job-id-val { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--accent); }
+    .copy-btn {
+      margin-left: auto; font-size: 10px; padding: 2px 8px;
+      border-radius: 4px; background: var(--bg-3); border: 1px solid var(--border);
+      color: var(--text-3); cursor: pointer; transition: all 0.15s;
+    }
+    .copy-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* Status badge */
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; font-weight: 600; padding: 3px 10px;
+      border-radius: 20px; text-transform: uppercase; letter-spacing: 0.06em;
+    }
+    .status-badge.queued   { background: var(--blue-bg);   color: var(--blue);   border: 1px solid var(--blue); }
+    .status-badge.running  { background: var(--yellow-bg);  color: var(--yellow); border: 1px solid var(--yellow); }
+    .status-badge.succeeded{ background: var(--green-bg);  color: var(--green);  border: 1px solid var(--green); }
+    .status-badge.failed   { background: var(--red-bg);    color: var(--red);    border: 1px solid var(--red); }
+
+    /* Progress bar */
+    .progress-track {
+      height: 4px; background: var(--bg-3); border-radius: 2px;
+      margin-top: 10px; overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%; border-radius: 2px;
+      background: linear-gradient(90deg, var(--accent), #a78bfa);
+      transition: width 0.4s ease;
+      width: 0%;
+    }
+    .progress-bar.indeterminate {
+      width: 40%;
+      animation: indeterminate 1.5s ease-in-out infinite;
+    }
+    @keyframes indeterminate {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
+    /* ─────────────────────────────────────────
+       GATES PANEL
+    ───────────────────────────────────────── */
+    .gates-grid {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px;
+      margin-bottom: 14px;
+    }
+    .gate-card {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: var(--radius-sm); padding: 12px 10px;
+      text-align: center; transition: all 0.3s;
+    }
+    .gate-card .g-num  { font-size: 10px; color: var(--text-3); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .gate-card .g-name { font-size: 11px; font-weight: 600; color: var(--text-2); margin-bottom: 8px; }
+    .gate-card .g-icon { font-size: 22px; margin-bottom: 4px; }
+    .gate-card .g-stat { font-size: 10px; color: var(--text-3); }
+
+    .gate-card.pass  { border-color: var(--green); background: var(--green-bg); }
+    .gate-card.fail  { border-color: var(--red);   background: var(--red-bg); }
+    .gate-card.pass .g-name { color: var(--green); }
+    .gate-card.fail .g-name { color: var(--red); }
+
+    /* ─────────────────────────────────────────
+       SCORE METER
+    ───────────────────────────────────────── */
+    .score-row { display: flex; align-items: center; gap: 16px; margin-bottom: 14px; }
+    .score-circle {
+      width: 72px; height: 72px; flex-shrink: 0;
+      position: relative;
+    }
+    .score-circle svg { transform: rotate(-90deg); }
+    .score-circle .score-num {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; font-weight: 700; font-family: 'JetBrains Mono', monospace;
+    }
+    .score-meta { flex: 1; }
+    .score-meta h3 { font-size: 14px; font-weight: 600; margin-bottom: 4px; }
+    .score-meta p  { font-size: 12px; color: var(--text-2); }
+
+    /* ─────────────────────────────────────────
+       CODE OUTPUT
+    ───────────────────────────────────────── */
+    .code-output {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: auto;
+      max-height: 400px;
+    }
+    .code-output-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(255,255,255,0.02);
+    }
+    .code-output-title { font-size: 11px; color: var(--text-3); font-family: 'JetBrains Mono', monospace; }
+    .copy-code-btn {
+      font-size: 10px; padding: 3px 8px; border-radius: 4px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      color: var(--text-3); cursor: pointer; transition: all 0.15s;
+    }
+    .copy-code-btn:hover { border-color: var(--accent); color: var(--accent); }
+    pre.output-code {
+      padding: 16px;
+      font-size: 12px; line-height: 1.7;
+      color: #c9d1d9;
+      white-space: pre-wrap; word-break: break-all;
+      margin: 0;
+    }
+
+    /* ─────────────────────────────────────────
+       ANNOTATED IR
+    ───────────────────────────────────────── */
+    .ir-chip {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 11px; padding: 3px 10px; border-radius: 20px; margin: 3px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .ir-chip.polyhedral { background: var(--blue-bg);  color: var(--blue);  border: 1px solid var(--blue); }
+    .ir-chip.irregular  { background: var(--yellow-bg); color: var(--yellow); border: 1px solid var(--yellow); }
+    .ir-chip.sequential { background: var(--red-bg);   color: var(--red);   border: 1px solid var(--red); }
+
+    .ir-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .ir-table th { text-align: left; color: var(--text-3); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .ir-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); vertical-align: top; color: var(--text); }
+    .ir-table tr:last-child td { border-bottom: none; }
+    .ir-table td:first-child { font-family: 'JetBrains Mono', monospace; color: var(--accent); font-size: 11px; }
+
+    /* ─────────────────────────────────────────
+       ATTEMPTS LOG
+    ───────────────────────────────────────── */
+    .attempt-row {
+      display: flex; align-items: flex-start; gap: 10px;
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+    }
+    .attempt-row:last-child { border-bottom: none; }
+    .attempt-num {
+      width: 24px; height: 24px; border-radius: 50%; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 11px; font-weight: 700;
+      background: var(--bg-3); color: var(--text-3);
+    }
+    .attempt-num.best { background: var(--green-bg); color: var(--green); border: 1px solid var(--green); }
+    .attempt-score { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; }
+    .attempt-gate  { font-size: 11px; color: var(--text-3); margin-top: 2px; }
+    .attempt-err   { font-size: 11px; color: var(--red); margin-top: 3px; font-family: 'JetBrains Mono', monospace; }
+
+    .score-bar-wrap { flex: 1; display: flex; align-items: center; gap: 8px; }
+    .score-bar-bg { flex: 1; height: 4px; background: var(--bg-3); border-radius: 2px; overflow: hidden; }
+    .score-bar-fill { height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--accent), var(--green)); transition: width 0.6s; }
+
+    /* ─────────────────────────────────────────
+       JOBS HISTORY TABLE
+    ───────────────────────────────────────── */
+    .history-section { padding-bottom: 40px; }
+    .history-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    .history-table th { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); color: var(--text-3); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; }
+    .history-table td { padding: 10px 14px; border-bottom: 1px solid var(--border); }
+    .history-table tr:hover td { background: rgba(255,255,255,0.02); }
+    .history-table .job-id-link { font-family: 'JetBrains Mono', monospace; color: var(--accent); cursor: pointer; font-size: 11px; }
+    .history-table .job-id-link:hover { text-decoration: underline; }
+    .history-table .fn-name { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+    .empty-state { text-align: center; padding: 40px; color: var(--text-3); font-size: 13px; }
+
+    /* ─────────────────────────────────────────
+       DIFF VIEW
+    ───────────────────────────────────────── */
+    .diff-wrap { overflow: auto; max-height: 380px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); }
+    .diff-line { display: flex; gap: 0; font-size: 11.5px; font-family: 'JetBrains Mono', monospace; line-height: 1.7; }
+    .diff-line .ln { width: 40px; text-align: right; padding: 0 8px; color: var(--text-3); flex-shrink: 0; user-select: none; }
+    .diff-line .dc { flex: 1; padding: 0 12px; white-space: pre-wrap; word-break: break-all; }
+    .diff-line.add  { background: rgba(34,212,123,0.07); }
+    .diff-line.add  .dc { color: var(--green); }
+    .diff-line.add  .ln { color: rgba(34,212,123,0.4); }
+    .diff-line.del  { background: rgba(248,80,80,0.07); }
+    .diff-line.del  .dc { color: var(--red); }
+    .diff-line.del  .ln { color: rgba(248,80,80,0.4); }
+
+    /* ─────────────────────────────────────────
+       TABS
+    ───────────────────────────────────────── */
+    .tabs { display: flex; gap: 2px; padding: 14px 18px 0; border-bottom: 1px solid var(--border); }
+    .tab {
+      padding: 7px 14px; font-size: 12px; font-weight: 500; cursor: pointer;
+      color: var(--text-3); border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+      border: 1px solid transparent; border-bottom: none; margin-bottom: -1px;
+      transition: all 0.15s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { color: var(--accent); background: var(--bg-2); border-color: var(--border); }
+    .tab-panel { display: none; padding: 18px; }
+    .tab-panel.active { display: block; }
+
+    /* ─────────────────────────────────────────
+       UTILITY
+    ───────────────────────────────────────── */
+    .flex { display: flex; }
+    .gap-8 { gap: 8px; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+    .text-sm { font-size: 12px; }
+    .text-xs { font-size: 11px; }
+    .text-muted { color: var(--text-3); }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .mt-8  { margin-top: 8px; }
+    .mt-12 { margin-top: 12px; }
+    .mt-16 { margin-top: 16px; }
+    .mb-8  { margin-bottom: 8px; }
+    .hidden { display: none !important; }
+
+    .section-title {
+      font-size: 11px; font-weight: 600; color: var(--text-3);
+      text-transform: uppercase; letter-spacing: 0.07em;
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 12px;
+    }
+    .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+    /* Toast */
+    .toast {
+      position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 12px 18px;
+      font-size: 13px; color: var(--text);
+      box-shadow: var(--shadow);
+      transform: translateY(20px); opacity: 0;
+      transition: all 0.3s; pointer-events: none;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast.success { border-color: var(--green); color: var(--green); }
+    .toast.error   { border-color: var(--red);   color: var(--red); }
+
+    /* ─────────────────────────────────────────
+       FOOTER
+    ───────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border); padding: 20px 24px;
+      text-align: center; font-size: 11px; color: var(--text-3);
+    }
+  </style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="header-inner">
+    <a href="#" class="logo">
+      <div class="logo-icon">⚡</div>
+      <div>
+        <div class="logo-text">APG Studio</div>
+        <div class="logo-sub">Autonomous Parallel Code Generator</div>
+      </div>
+    </a>
+
+    <div class="header-pills">
+      <span class="pill">Phase 2 ✓</span>
+      <span class="pill">Phase 3 ⟳</span>
+    </div>
+
+    <div class="server-status">
+      <div class="status-dot" id="serverDot"></div>
+      <span id="serverLabel">Checking server…</span>
+    </div>
+  </div>
+</header>
+
+<!-- HERO -->
+<div class="wrap">
+  <section class="hero">
+    <div class="hero-badge">⚡ Research Preview · CAMLDS / Wonder</div>
+    <h1>Sequential C → Verified Parallel</h1>
+    <p class="hero-sub">Submit a C function. APG classifies loop regions, generates OpenMP candidates, and formally verifies correctness — no human in the loop.</p>
+    <div class="hero-gates">
+      <div class="gate-chip"><div class="dot"></div>Gate 1: Compile</div>
+      <div class="gate-chip"><div class="dot"></div>Gate 2: Functional Equiv</div>
+      <div class="gate-chip"><div class="dot"></div>Gate 3: ThreadSanitizer</div>
+      <div class="gate-chip"><div class="dot"></div>Gate 4: CBMC / Lean 4</div>
+    </div>
+  </section>
+
+  <!-- MAIN GRID -->
+  <div class="main-grid">
+
+    <!-- LEFT: SUBMIT PANEL -->
+    <div>
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title"><span class="icon">✏️</span> Source Code</div>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span class="text-xs text-muted mono" id="charCount">0 chars</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <!-- Example quick-load -->
+          <div class="section-title">Quick Examples</div>
+          <div class="examples-row" id="exampleBtns">
+            <button class="example-btn" data-key="vector_scale">vector_scale</button>
+            <button class="example-btn" data-key="matrix_multiply">matrix_multiply</button>
+            <button class="example-btn" data-key="histogram">histogram</button>
+            <button class="example-btn" data-key="prefix_sum">prefix_sum</button>
+            <button class="example-btn" data-key="dot_product">dot_product</button>
+            <button class="example-btn" data-key="stencil_1d">stencil_1d</button>
+          </div>
+
+          <!-- Or drop a file -->
+          <div class="section-title">Editor</div>
+          <div class="editor-wrap">
+            <textarea class="code-editor" id="codeEditor" spellcheck="false" placeholder="// Paste your sequential C function here...
+void my_function(float* A, int N) {
+    for (int i = 0; i < N; i++) {
+        A[i] *= 2.0f;
+    }
+}"></textarea>
+          </div>
+
+          <!-- Config -->
+          <div class="config-row">
+            <div class="config-field">
+              <label class="config-label">Provider</label>
+              <select class="config-select" id="cfgProvider" onchange="onProviderChange()">
+                <option value="ollama">Ollama (local)</option>
+                <option value="groq">Groq</option>
+                <option value="gemini">Gemini</option>
+              </select>
+            </div>
+            <div class="config-field">
+              <label class="config-label">Model Override</label>
+              <input class="config-input" id="cfgModel" type="text" placeholder="deepseek-r1:8b" />
+            </div>
+            <div class="config-field">
+              <label class="config-label">Candidates</label>
+              <input class="config-input" id="cfgCandidates" type="number" min="1" max="5" value="2" />
+            </div>
+            <div class="config-field">
+              <label class="config-label">Max Rounds</label>
+              <input class="config-input" id="cfgRounds" type="number" min="1" max="5" value="2" />
+            </div>
+            <div class="config-field">
+              <label class="config-label">Target</label>
+              <select class="config-select" id="cfgTarget">
+                <option value="openmp">OpenMP</option>
+                <option value="openmp-target">OpenMP Target</option>
+                <option value="cuda">CUDA</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="config-row" style="margin-top: 10px; margin-bottom: 6px;">
+            <div class="config-field" style="flex-direction: row; align-items: center; gap: 8px; min-width: unset;">
+              <input type="checkbox" id="cfgLocalClassifier" checked style="width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer;" />
+              <label for="cfgLocalClassifier" class="config-label" style="cursor: pointer; user-select: none; text-transform: none; font-size: 12px; color: var(--text-2);">Use Local AST Classifier (skips slow Layer 1 LLM call)</label>
+            </div>
+          </div>
+
+          <button class="submit-btn" id="submitBtn" onclick="submitJob()">
+            <span id="submitIcon">⚡</span>
+            <span id="submitLabel">Parallelise</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Job status box -->
+      <div class="job-status-box" id="jobStatusBox" style="margin-top:16px;">
+        <div class="job-id-row">
+          <span class="job-id-label">Job</span>
+          <span class="job-id-val mono" id="currentJobId">—</span>
+          <button class="copy-btn" onclick="copyJobId()">Copy</button>
+          <span class="status-badge queued" id="statusBadge">Queued</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar indeterminate" id="progressBar"></div>
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:var(--text-3)" id="statusMsg">Job submitted — waiting for worker…</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: RESULTS PANEL -->
+    <div id="resultPanel" style="display:none;">
+      <div class="panel" style="height:100%;">
+        <div class="tabs" id="resultTabs">
+          <div class="tab active" onclick="switchTab('output')">Output</div>
+          <div class="tab" onclick="switchTab('diff')">Diff</div>
+          <div class="tab" onclick="switchTab('ir')">Annotated IR</div>
+          <div class="tab" onclick="switchTab('attempts')">Attempts</div>
+        </div>
+
+        <!-- OUTPUT TAB -->
+        <div class="tab-panel active" id="tab-output">
+          <!-- Score + Gates row -->
+          <div class="score-row" id="scoreRow">
+            <div class="score-circle">
+              <svg width="72" height="72" viewBox="0 0 72 72">
+                <circle cx="36" cy="36" r="30" fill="none" stroke="var(--bg-3)" stroke-width="5"/>
+                <circle cx="36" cy="36" r="30" fill="none" stroke="url(#scoreGrad)" stroke-width="5"
+                  stroke-linecap="round"
+                  stroke-dasharray="188.5"
+                  stroke-dashoffset="188.5"
+                  id="scoreCircle"/>
+                <defs>
+                  <linearGradient id="scoreGrad" x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stop-color="var(--accent)"/>
+                    <stop offset="100%" stop-color="var(--green)"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+              <div class="score-num" id="scoreNum">—</div>
+            </div>
+            <div class="score-meta">
+              <h3 id="scoreSummary">Awaiting result…</h3>
+              <p id="scoreDetail" class="text-muted"></p>
+            </div>
+          </div>
+
+          <div class="gates-grid" id="gatesGrid">
+            <div class="gate-card" id="gate1">
+              <div class="g-num">Gate 1</div>
+              <div class="g-name">Compile</div>
+              <div class="g-icon">⏳</div>
+              <div class="g-stat">—</div>
+            </div>
+            <div class="gate-card" id="gate2">
+              <div class="g-num">Gate 2</div>
+              <div class="g-name">Output Match</div>
+              <div class="g-icon">⏳</div>
+              <div class="g-stat">—</div>
+            </div>
+            <div class="gate-card" id="gate3">
+              <div class="g-num">Gate 3</div>
+              <div class="g-name">ThreadSanitizer</div>
+              <div class="g-icon">⏳</div>
+              <div class="g-stat">—</div>
+            </div>
+            <div class="gate-card" id="gate4">
+              <div class="g-num">Gate 4</div>
+              <div class="g-name">Formal Proof</div>
+              <div class="g-icon">⏳</div>
+              <div class="g-stat">—</div>
+            </div>
+          </div>
+
+          <div class="code-output" id="codeOutputWrap">
+            <div class="code-output-header">
+              <span class="code-output-title mono">// parallel_output.c</span>
+              <button class="copy-code-btn" onclick="copyOutput()">Copy</button>
+            </div>
+            <pre class="output-code" id="codeOutput">// Result will appear here after the pipeline completes.</pre>
+          </div>
+        </div>
+
+        <!-- DIFF TAB -->
+        <div class="tab-panel" id="tab-diff">
+          <div class="section-title">Unified Diff — Sequential vs Parallel</div>
+          <div class="diff-wrap" id="diffWrap">
+            <div class="empty-state">No diff available yet.</div>
+          </div>
+        </div>
+
+        <!-- ANNOTATED IR TAB -->
+        <div class="tab-panel" id="tab-ir">
+          <div class="section-title">Loop Region Classification</div>
+          <div id="irContent">
+            <div class="empty-state">No IR data yet.</div>
+          </div>
+        </div>
+
+        <!-- ATTEMPTS TAB -->
+        <div class="tab-panel" id="tab-attempts">
+          <div class="section-title">Candidate Attempts</div>
+          <div id="attemptsContent">
+            <div class="empty-state">No attempts recorded yet.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY -->
+  <div class="history-section">
+    <div class="section-title">Job History</div>
+    <div class="panel">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Job ID</th>
+            <th>Function</th>
+            <th>Status</th>
+            <th>Score</th>
+            <th>Rounds</th>
+            <th>Submitted</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody">
+          <tr><td colspan="6"><div class="empty-state">Submit your first job to see history.</div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<footer>
+  APG Studio · CAMLDS / Wonder · 2025 &nbsp;·&nbsp; Go Orchestrator + Python Workers · Ollama DeepSeek-Coder 6.7B
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<!-- ─────────────────────────────────────────
+     JAVASCRIPT
+───────────────────────────────────────── -->
+<script>
+// ── Config ────────────────────────────────────────────────────────────────────
+const API = 'http://localhost:8080';
+const POLL_MS = 2000;
+
+// ── Example snippets ──────────────────────────────────────────────────────────
+const EXAMPLES = {
+  vector_scale: `void vector_scale(float* A, float s, int N) {
+    for (int i = 0; i < N; i++) {
+        A[i] *= s;
+    }
+}`,
+  matrix_multiply: `/* Dense matrix multiplication (polyhedral nest)
+ * Parallelism type: POLYHEDRAL
+ * Expected: #pragma omp parallel for collapse(2) */
+void matrix_multiply(float* A, float* B, float* C, int N) {
+    for (int i = 0; i < N; i++) {
+        for (int j = 0; j < N; j++) {
+            float s = 0.0f;
+            for (int k = 0; k < N; k++) {
+                s += A[i * N + k] * B[k * N + j];
+            }
+            C[i * N + j] = s;
+        }
+    }
+}`,
+  histogram: `/* Histogram update with indirect indexing (IRREGULAR)
+ * Race risk: HIGH — requires atomic or local histogram */
+void histogram(int* hist, int* data, int N, int num_bins) {
+    for (int i = 0; i < N; i++) {
+        hist[data[i]]++;
+    }
+}`,
+  prefix_sum: `/* Exclusive prefix sum (inherently sequential)
+ * Loop-carried RAW dependency: A[i] = A[i] + A[i-1] */
+void prefix_sum(float* A, int N) {
+    for (int i = 1; i < N; i++) {
+        A[i] += A[i - 1];
+    }
+}`,
+  dot_product: `/* Dot product — reduction pattern */
+float dot_product(float* A, float* B, int N) {
+    float sum = 0.0f;
+    for (int i = 0; i < N; i++) {
+        sum += A[i] * B[i];
+    }
+    return sum;
+}`,
+  stencil_1d: `/* 1D heat-equation stencil */
+void stencil_1d(float* A, float* B, int N) {
+    for (int i = 1; i < N - 1; i++) {
+        B[i] = 0.5f * (A[i-1] + A[i+1]);
+    }
+}`
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let pollTimer = null;
+let currentJobId = null;
+let jobHistory = [];
+let originalSource = '';
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  checkServer();
+  setInterval(checkServer, 10000);
+  loadHistory();
+
+  const editor = document.getElementById('codeEditor');
+  editor.addEventListener('input', () => {
+    document.getElementById('charCount').textContent = editor.value.length + ' chars';
+  });
+
+  // Tab button events for examples
+  document.querySelectorAll('.example-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      loadExample(btn.dataset.key);
+      document.querySelectorAll('.example-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+});
+
+// ── Server health check ───────────────────────────────────────────────────────
+async function checkServer() {
+  const dot   = document.getElementById('serverDot');
+  const label = document.getElementById('serverLabel');
+  try {
+    const r = await fetch(`${API}/health`, { signal: AbortSignal.timeout(3000) });
+    if (r.ok) {
+      dot.classList.add('online');
+      label.textContent = 'Server online';
+    } else {
+      throw new Error('not ok');
+    }
+  } catch {
+    dot.classList.remove('online');
+    label.textContent = 'Server offline';
+  }
+}
+
+// ── Load history from API ─────────────────────────────────────────────────────
+async function loadHistory() {
+  try {
+    const r = await fetch(`${API}/jobs`, { signal: AbortSignal.timeout(4000) });
+    if (!r.ok) return;
+    const jobs = await r.json();
+    if (!Array.isArray(jobs) || jobs.length === 0) return;
+    // Merge into in-memory history (avoid duplicates)
+    jobs.forEach(j => {
+      if (!jobHistory.find(h => h.id === j.id)) {
+        jobHistory.push({ ...j, funcName: '…', submittedAt: new Date(j.created_at) });
+      }
+    });
+    renderHistory();
+  } catch { /* server may be offline */ }
+}
+
+// ── Load example ──────────────────────────────────────────────────────────────
+function loadExample(key) {
+  const code = EXAMPLES[key];
+  if (!code) return;
+  const editor = document.getElementById('codeEditor');
+  editor.value = code;
+  document.getElementById('charCount').textContent = code.length + ' chars';
+}
+
+function onProviderChange() {
+  const provider = document.getElementById('cfgProvider').value;
+  const modelInput = document.getElementById('cfgModel');
+  if (provider === 'gemini') {
+    modelInput.placeholder = 'gemini-1.5-flash';
+  } else if (provider === 'groq') {
+    modelInput.placeholder = 'llama3-8b-8192';
+  } else {
+    modelInput.placeholder = 'deepseek-r1:8b';
+  }
+}
+
+// ── Submit job ────────────────────────────────────────────────────────────────
+async function submitJob() {
+  const source = document.getElementById('codeEditor').value.trim();
+  if (!source) { toast('Paste some C code first.', 'error'); return; }
+
+  originalSource = source;
+
+  const btn   = document.getElementById('submitBtn');
+  const icon  = document.getElementById('submitIcon');
+  const label = document.getElementById('submitLabel');
+
+  btn.disabled = true;
+  icon.innerHTML = '<div class="spinner"></div>';
+  label.textContent = 'Submitting…';
+
+  const payload = {
+    source: source,
+    provider: document.getElementById('cfgProvider').value,
+    model: document.getElementById('cfgModel').value.trim() || null,
+    max_candidates: parseInt(document.getElementById('cfgCandidates').value) || 2,
+    max_rounds: parseInt(document.getElementById('cfgRounds').value) || 2,
+    target: document.getElementById('cfgTarget').value,
+    use_local_classifier: document.getElementById('cfgLocalClassifier').checked
+  };
+
+  try {
+    const res = await fetch(`${API}/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+
+    const job = await res.json();
+    currentJobId = job.id;
+
+    document.getElementById('currentJobId').textContent = job.id;
+    document.getElementById('jobStatusBox').classList.add('visible');
+    document.getElementById('resultPanel').style.display = 'block';
+
+    // Reset result UI
+    resetResultUI();
+    updateStatusBadge('queued');
+    document.getElementById('statusMsg').textContent = 'Job queued — worker picking up…';
+
+    // Add to history
+    addToHistory(job, source);
+
+    // Start polling
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(() => pollJob(job.id), POLL_MS);
+
+    toast(`Job ${job.id} submitted!`, 'success');
+  } catch (err) {
+    toast('Submit failed: ' + err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    icon.textContent = '⚡';
+    label.textContent = 'Parallelise';
+  }
+}
+
+// ── Poll job ──────────────────────────────────────────────────────────────────
+async function pollJob(id) {
+  try {
+    const res = await fetch(`${API}/result/${id}`);
+    if (!res.ok) return;
+    const job = await res.json();
+
+    updateJobStatusUI(job);
+
+    if (job.status === 'succeeded' || job.status === 'failed') {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      renderResult(job);
+      updateHistoryRow(job);
+    }
+  } catch (e) {
+    console.warn('Poll error:', e);
+  }
+}
+
+// ── Update status UI ──────────────────────────────────────────────────────────
+function updateJobStatusUI(job) {
+  updateStatusBadge(job.status);
+  const msgs = {
+    queued:    'Job queued — worker picking up…',
+    running:   'Pipeline running — classifying and generating candidates…',
+    succeeded: `✓ Complete in ${job.rounds} round(s). Score: ${(job.score * 100).toFixed(0)}%`,
+    failed:    '✗ Pipeline failed — check Attempts tab for details.',
+  };
+  document.getElementById('statusMsg').textContent = msgs[job.status] || job.status;
+  const bar = document.getElementById('progressBar');
+  if (job.status === 'succeeded') {
+    bar.classList.remove('indeterminate');
+    bar.style.width = (job.score * 100) + '%';
+  } else if (job.status === 'failed') {
+    bar.classList.remove('indeterminate');
+    bar.style.width = '30%';
+    bar.style.background = 'var(--red)';
+  }
+}
+
+function updateStatusBadge(status) {
+  const badge = document.getElementById('statusBadge');
+  badge.className = 'status-badge ' + status;
+  badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+// ── Render full result ────────────────────────────────────────────────────────
+function renderResult(job) {
+  const score = job.score || 0;
+
+  // Score circle
+  const pct = score;
+  const circ = document.getElementById('scoreCircle');
+  const circumference = 188.5;
+  circ.style.strokeDashoffset = circumference - pct * circumference;
+
+  document.getElementById('scoreNum').textContent = Math.round(pct * 100) + '%';
+
+  const success = job.status === 'succeeded';
+  document.getElementById('scoreSummary').textContent = success ? '✓ Verification Passed' : '✗ Verification Failed';
+  document.getElementById('scoreDetail').textContent = `${job.rounds} round(s) · ${job.attempts ? job.attempts.length : 0} attempt(s)`;
+
+  // Gate cards
+  renderGateCards(job);
+
+  // Code output
+  const code = job.result || (job.error ? `// Error: ${job.error}` : '// No output.');
+  document.getElementById('codeOutput').textContent = code;
+
+  // Diff view
+  renderDiff(originalSource, code);
+
+  // Annotated IR
+  renderIR(job.annotated_ir);
+
+  // Attempts
+  renderAttempts(job.attempts || []);
+}
+
+function renderGateCards(job) {
+  const gateNames = ['compile', 'output_match', 'tsan', 'proof'];
+  const gateLabels = ['Compile', 'Output Match', 'ThreadSanitizer', 'Formal Proof'];
+  const gateIcons  = { pass: '✅', fail: '❌', skip: '⏭️', pending: '⏳' };
+
+  const gatePassed = job.attempts && job.attempts.length > 0
+    ? job.attempts.reduce((best, a) => a.score > (best.score || 0) ? a : best, {})
+    : null;
+
+  const passedGate = gatePassed ? (gatePassed.gate || '') : '';
+
+  // Determine which gates passed based on the gate string
+  const gateOrder = ['compile', 'output_match', 'tsan', 'proof'];
+  const passIdx = gateOrder.indexOf(passedGate.replace(/_\d+$/, ''));
+  const isSuccess = job.status === 'succeeded';
+
+  gateOrder.forEach((g, i) => {
+    const el = document.getElementById(`gate${i + 1}`);
+    const icon = el.querySelector('.g-icon');
+    const stat = el.querySelector('.g-stat');
+    el.classList.remove('pass', 'fail');
+
+    if (isSuccess || (passIdx >= 0 && i <= passIdx)) {
+      if (isSuccess && i <= 2) {
+        el.classList.add('pass');
+        icon.textContent = '✅';
+        stat.textContent = 'Passed';
+      } else if (!isSuccess && passIdx >= 0 && i < passIdx) {
+        el.classList.add('pass');
+        icon.textContent = '✅';
+        stat.textContent = 'Passed';
+      } else if (!isSuccess && i === passIdx) {
+        el.classList.add('fail');
+        icon.textContent = '❌';
+        stat.textContent = 'Failed';
+      } else {
+        icon.textContent = '⏭️';
+        stat.textContent = 'Skipped';
+      }
+    } else if (isSuccess && i === 3) {
+      icon.textContent = job.score >= 1.0 ? '✅' : '⏭️';
+      stat.textContent = job.score >= 1.0 ? 'Proven' : 'N/A';
+      if (job.score >= 1.0) el.classList.add('pass');
+    }
+  });
+
+  if (isSuccess) {
+    ['gate1','gate2','gate3'].forEach(id => {
+      const el = document.getElementById(id);
+      if (!el.classList.contains('pass')) {
+        el.classList.add('pass');
+        el.querySelector('.g-icon').textContent = '✅';
+        el.querySelector('.g-stat').textContent = 'Passed';
+      }
+    });
+  }
+}
+
+// ── Diff rendering ────────────────────────────────────────────────────────────
+function renderDiff(original, parallel) {
+  const wrap = document.getElementById('diffWrap');
+  if (!original || !parallel || parallel.startsWith('// No output') || parallel.startsWith('// Error')) {
+    wrap.innerHTML = '<div class="empty-state">No diff available.</div>';
+    return;
+  }
+
+  const oLines = original.split('\n');
+  const pLines = parallel.split('\n');
+  let html = '';
+
+  // Simple line-by-line diff
+  const maxLines = Math.max(oLines.length, pLines.length);
+  let oIdx = 0, pIdx = 0;
+
+  // Use LCS-style: find lines that match and show +/-
+  const oSet = new Set(oLines.map((l,i) => l.trim()));
+  const pSet = new Set(pLines.map((l,i) => l.trim()));
+
+  pLines.forEach((line, i) => {
+    const trimmed = line.trim();
+    const isNew = !oLines.some(o => o.trim() === trimmed);
+    const cls = isNew ? 'add' : '';
+    const prefix = isNew ? '+' : ' ';
+    html += `<div class="diff-line ${cls}"><span class="ln">${i+1}</span><span class="dc">${prefix} ${escHtml(line)}</span></div>`;
+  });
+
+  wrap.innerHTML = html || '<div class="empty-state">Files are identical.</div>';
+}
+
+// ── IR rendering ──────────────────────────────────────────────────────────────
+function renderIR(ir) {
+  const el = document.getElementById('irContent');
+  if (!ir || Object.keys(ir).length === 0) {
+    el.innerHTML = '<div class="empty-state">No IR data.</div>'; return;
+  }
+
+  const type = ir.type || 'unknown';
+  const typeCls = ['polyhedral','irregular','sequential'].includes(type) ? type : '';
+
+  let html = `<div style="margin-bottom:14px;">
+    <span class="ir-chip ${typeCls}">${type}</span>
+    ${ir.affine === true ? '<span class="ir-chip polyhedral">affine ✓</span>' : ''}
+    ${ir.race_risk ? `<span class="ir-chip irregular">race risk: ${ir.race_risk}</span>` : ''}
+  </div>`;
+
+  if (ir.summary) {
+    html += `<p style="font-size:12px;color:var(--text-2);margin-bottom:14px;line-height:1.7;">${escHtml(ir.summary)}</p>`;
+  }
+
+  html += `<table class="ir-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody>`;
+  for (const [k, v] of Object.entries(ir)) {
+    if (k === 'summary' || k === 'type') continue;
+    const val = typeof v === 'object' ? JSON.stringify(v, null, 2) : String(v);
+    html += `<tr><td>${escHtml(k)}</td><td style="font-family:'JetBrains Mono',monospace;font-size:11px;white-space:pre-wrap;">${escHtml(val)}</td></tr>`;
+  }
+  html += `</tbody></table>`;
+  el.innerHTML = html;
+}
+
+// ── Attempts rendering ────────────────────────────────────────────────────────
+function renderAttempts(attempts) {
+  const el = document.getElementById('attemptsContent');
+  if (!attempts || attempts.length === 0) {
+    el.innerHTML = '<div class="empty-state">No attempts recorded.</div>'; return;
+  }
+
+  const bestScore = Math.max(...attempts.map(a => a.score || 0));
+  let html = '';
+  attempts.forEach((a, i) => {
+    const isBest = a.score === bestScore;
+    const pct = (a.score || 0) * 100;
+    html += `
+      <div class="attempt-row">
+        <div class="attempt-num ${isBest ? 'best' : ''}">${i+1}</div>
+        <div style="flex:1">
+          <div class="flex items-center gap-8 mb-8">
+            <div class="score-bar-wrap">
+              <div class="score-bar-bg"><div class="score-bar-fill" style="width:${pct}%"></div></div>
+            </div>
+            <span class="attempt-score mono" style="color:${scoreColor(a.score)}">${pct.toFixed(0)}%</span>
+            ${isBest ? '<span class="ir-chip polyhedral" style="padding:1px 7px;margin:0;">best</span>' : ''}
+          </div>
+          <div class="attempt-gate">Gate reached: <span class="mono">${a.gate || 'none'}</span></div>
+          ${a.error ? `<div class="attempt-err">${escHtml(a.error.slice(0, 180))}${a.error.length > 180 ? '…' : ''}</div>` : ''}
+        </div>
+      </div>`;
+  });
+  el.innerHTML = html;
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach((t, i) => {
+    const names = ['output','diff','ir','attempts'];
+    t.classList.toggle('active', names[i] === name);
+  });
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+// ── History table ─────────────────────────────────────────────────────────────
+function addToHistory(job, source) {
+  const funcMatch = source.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+  const funcName = funcMatch ? funcMatch[1] : 'unknown';
+
+  const entry = { ...job, funcName, submittedAt: new Date() };
+  jobHistory.unshift(entry);
+  renderHistory();
+}
+
+function updateHistoryRow(job) {
+  const idx = jobHistory.findIndex(j => j.id === job.id);
+  if (idx !== -1) {
+    jobHistory[idx] = { ...jobHistory[idx], ...job };
+    renderHistory();
+  }
+}
+
+function renderHistory() {
+  const tbody = document.getElementById('historyBody');
+  if (jobHistory.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">Submit your first job to see history.</div></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = jobHistory.map(j => `
+    <tr>
+      <td><span class="job-id-link" onclick="loadJob('${j.id}')">${j.id}</span></td>
+      <td><span class="fn-name">${escHtml(j.funcName || '—')}</span></td>
+      <td><span class="status-badge ${j.status}">${j.status}</span></td>
+      <td class="mono">${j.score ? (j.score * 100).toFixed(0) + '%' : '—'}</td>
+      <td>${j.rounds || '—'}</td>
+      <td class="text-muted">${j.submittedAt ? j.submittedAt.toLocaleTimeString() : '—'}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadJob(id) {
+  try {
+    const res = await fetch(`${API}/result/${id}`);
+    const job = await res.json();
+    document.getElementById('currentJobId').textContent = job.id;
+    document.getElementById('jobStatusBox').classList.add('visible');
+    document.getElementById('resultPanel').style.display = 'block';
+    updateJobStatusUI(job);
+    if (job.status === 'succeeded' || job.status === 'failed') {
+      renderResult(job);
+    }
+    currentJobId = id;
+  } catch (e) {
+    toast('Could not load job: ' + e.message, 'error');
+  }
+}
+
+// ── Reset result UI ───────────────────────────────────────────────────────────
+function resetResultUI() {
+  document.getElementById('codeOutput').textContent = '// Waiting for pipeline…';
+  document.getElementById('scoreNum').textContent = '—';
+  document.getElementById('scoreSummary').textContent = 'Running pipeline…';
+  document.getElementById('scoreDetail').textContent = '';
+  document.getElementById('scoreCircle').style.strokeDashoffset = '188.5';
+  document.getElementById('diffWrap').innerHTML = '<div class="empty-state">No diff yet.</div>';
+  document.getElementById('irContent').innerHTML = '<div class="empty-state">No IR data yet.</div>';
+  document.getElementById('attemptsContent').innerHTML = '<div class="empty-state">No attempts yet.</div>';
+  ['gate1','gate2','gate3','gate4'].forEach(id => {
+    const el = document.getElementById(id);
+    el.classList.remove('pass','fail');
+    el.querySelector('.g-icon').textContent = '⏳';
+    el.querySelector('.g-stat').textContent = '—';
+  });
+  document.getElementById('progressBar').classList.add('indeterminate');
+  document.getElementById('progressBar').style.width = '';
+  document.getElementById('progressBar').style.background = '';
+  switchTab('output');
+}
+
+// ── Clipboard ─────────────────────────────────────────────────────────────────
+function copyJobId() {
+  navigator.clipboard.writeText(currentJobId || '').then(() => toast('Job ID copied!', 'success'));
+}
+
+function copyOutput() {
+  const code = document.getElementById('codeOutput').textContent;
+  navigator.clipboard.writeText(code).then(() => toast('Code copied!', 'success'));
+}
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function toast(msg, type = '') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function scoreColor(s) {
+  if (!s) return 'var(--text-3)';
+  if (s >= 0.8) return 'var(--green)';
+  if (s >= 0.4) return 'var(--yellow)';
+  return 'var(--red)';
+}
+</script>
+</body>
+</html>

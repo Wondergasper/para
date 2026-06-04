@@ -62,6 +62,8 @@ class PipelineConfig:
     proof_corpus_path:   str   = ""           # Phase 3 proof corpus JSONL path
     reward_events_path:  str   = ""           # Phase 4 reward events JSONL path
     job_id:              str   = ""           # Optional job identifier for log prefixing
+    source_file:         str   = ""           # Optional C source file path for compilation context
+    target:              str   = "openmp"     # Target platform: openmp | openmp-target | cuda
 
 
 # ── Pipeline result ─────────────────────────────────────────────────────────────
@@ -132,6 +134,7 @@ def _verify_candidate_task(
         enable_cbmc=cfg.enable_cbmc,
         cbmc_path=cfg.cbmc_path,
         enable_proof=cfg.enable_proof,
+        target=cfg.target,
     )
 
     with _record_lock:
@@ -183,7 +186,7 @@ def run(
         if cfg.use_local_classifier:
             annotated_ir = classify_region(source_code)
         else:
-            annotated_ir = analyse(source_code, provider=cfg.provider, model=active_model)
+            annotated_ir = analyse(source_code, provider=cfg.provider, model=active_model, source_file=cfg.source_file)
     except (ValueError, RuntimeError) as e:
         if cfg.use_local_classifier:
             result.error = f"T1 analysis failed: {e}"
@@ -227,6 +230,7 @@ def run(
                 provider=cfg.provider,
                 model=active_model,
                 max_llm_candidates=cfg.max_t2_candidates,
+                target=cfg.target,
             )
         except RuntimeError as e:
             result.error = f"T2 generation failed: {e}"
