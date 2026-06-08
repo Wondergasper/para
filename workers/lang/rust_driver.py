@@ -285,33 +285,85 @@ fn main() {{
                 with open(os.path.join(tmpdir, "src", "main.rs"), "w", encoding="utf-8") as f:
                     f.write(main_rs_content)
 
-                # Compile and run
-                run_res = subprocess.run(
-                    [cargo, "run", "--release"],
+                # Build release binary first (separate from run so we can sweep threads)
+                build_res = subprocess.run(
+                    [cargo, "build", "--release"],
                     cwd=tmpdir,
                     capture_output=True,
                     text=True,
-                    timeout=60
+                    timeout=90,
                 )
-                output = (run_res.stdout or "").strip()
-                if run_res.returncode != 0 or "PASS" not in output:
-                    result.error = f"Rust output mismatch:\n{output or run_res.stderr}"
+                if build_res.returncode != 0:
+                    result.error = f"Rust build error:\n{(build_res.stderr or build_res.stdout)[:800]}"
                     return result
 
-                # Parse timing
-                match = re.search(r"time_ref=([0-9.Ee+-]+)\s*time_par=([0-9.Ee+-]+)", output)
-                time_ref, time_par = 0.0, 0.0
-                if match:
-                    time_ref = float(match.group(1))
-                    time_par = float(match.group(2))
+                # Locate compiled binary
+                import glob as _glob
+                bin_dir = os.path.join(tmpdir, "target", "release")
+                bins = [
+                    b for b in _glob.glob(os.path.join(bin_dir, "*"))
+                    if os.path.isfile(b) and not b.endswith((".d", ".rlib", ".pdb", ".exp", ".lib"))
+                ]
+                if not bins:
+                    result.error = "Rust build succeeded but no binary found in target/release."
+                    return result
+                exe = bins[0]
 
-                speedup = time_ref / time_par if time_par > 0 else 1.0
+                # Autotuning: sweep RAYON_NUM_THREADS [1, 2, 4, 8]
+                runs = []
+                best_speedup = -1.0
+                best_threads = 1
+                best_time_par = 0.0
+                time_ref = 0.0
+
+                for T in [1, 2, 4, 8]:
+                    run_res = subprocess.run(
+                        [exe],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        env={**os.environ, "RAYON_NUM_THREADS": str(T)},
+                    )
+                    at_output = (run_res.stdout or "").strip()
+                    if run_res.returncode != 0 or "PASS" not in at_output:
+                        result.error = f"Rust output mismatch at T={T}: {at_output or run_res.stderr[:400]}"
+                        return result
+
+                    at_match = re.search(r"time_ref=([0-9.Ee+-]+)\s*time_par=([0-9.Ee+-]+)", at_output)
+                    t_ref, t_par = 0.0, 0.0
+                    if at_match:
+                        t_ref = float(at_match.group(1))
+                        t_par = float(at_match.group(2))
+                    if T == 1:
+                        time_ref = t_ref
+
+                    sp = t_ref / t_par if t_par > 0 else 1.0
+                    runs.append({"threads": T, "time_ref": t_ref, "time_par": t_par, "speedup": sp})
+                    if sp > best_speedup or best_speedup < 0:
+                        best_speedup = sp
+                        best_threads = T
+                        best_time_par = t_par
+
+                # Gate 3 (soft): non-determinism race detection — run twice at T=4, compare
+                out1 = subprocess.run(
+                    [exe], capture_output=True, text=True, timeout=20,
+                    env={**os.environ, "RAYON_NUM_THREADS": "4"},
+                ).stdout or ""
+                out2 = subprocess.run(
+                    [exe], capture_output=True, text=True, timeout=20,
+                    env={**os.environ, "RAYON_NUM_THREADS": "4"},
+                ).stdout or ""
+                if "FAIL" in out2 and "PASS" in out1:
+                    result.details["race_warning"] = (
+                        "Non-deterministic output detected on second run — possible data race in Rayon parallelisation."
+                    )
+
                 result.details["autotuning"] = {
-                    "runs": [{"threads": 1, "time_ref": time_ref, "time_par": time_par, "speedup": speedup}],
-                    "best_threads": 1,
-                    "best_speedup": speedup,
-                    "best_time_par": time_par,
-                    "time_ref": time_ref
+                    "runs": runs,
+                    "best_threads": best_threads,
+                    "best_speedup": best_speedup,
+                    "best_time_par": best_time_par,
+                    "time_ref": time_ref,
                 }
                 result.output_ok = True
                 result.gate_passed = "output"
